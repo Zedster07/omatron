@@ -153,9 +153,12 @@ async function adopt(): Promise<number | null> {
 
   let port: number | null = null
   try {
-    const cmdline = (await fs.readFile(`/proc/${pid}/cmdline`, "utf8")).split("\0")
-    const flag = cmdline.find((a) => a.startsWith("--remote-debugging-port="))
-    const n = Number(flag?.split("=")[1])
+    // Matched, not split. /proc/<pid>/cmdline is NUL-separated in principle,
+    // but Chromium rewrites its own argv into one space-separated string for
+    // the process title -- so splitting on NUL yields two elements holding
+    // everything, and the flag is never found. Measured: 618 bytes, argc 2.
+    const cmdline = await fs.readFile(`/proc/${pid}/cmdline`, "utf8")
+    const n = Number(cmdline.match(/--remote-debugging-port=(\d+)/)?.[1])
     if (Number.isFinite(n) && n > 0) port = n
   } catch {
     return null   // the pid is stale; the lock outlived its owner
