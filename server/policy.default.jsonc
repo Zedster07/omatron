@@ -103,18 +103,24 @@
     // Separate from "type" because that one has to be usable: a setup where
     // every keystroke raises a card gets set to "allow" within a day, and then
     // a credential goes in with nothing shown. This asks whichever way "type"
-    // is set, and a full-access lease does not promote it -- the point of the
-    // lease is to stop interrupting you about ordinary work, and this is not
-    // ordinary work.
+    // is set, so you see the card once.
+    //
+    // A FULL-ACCESS LEASE COVERS IT. You granted that by hand, at the
+    // keyboard, for the next hour, to get a piece of work done -- and being
+    // stopped at a login box is precisely what you were buying your way past.
+    // An earlier version held the card up anyway; that made the switch not
+    // mean what it says, and made "review this app" impossible.
+    //
+    // A SCHEDULED JOB IS STILL REFUSED. That is the case worth refusing for:
+    // nobody is awake to see it, so there is no seeing it. Grant it in the
+    // moment, not on a timer.
     //
     // In the browser it is the field that decides, read over CDP: input
     // type=password, or an autocomplete of current-password, new-password or
     // one-time-code. On a native window there is nothing to read, so it
     // depends on the agent saying so.
     //
-    // "allow" is yours to set if you want it unattended, the same way
-    // run.commands lets you name an otherwise-destructive command. Nothing
-    // else will set it for you.
+    // "allow" skips even the first card. Yours to set; nothing sets it for you.
     "secret": "ask"
   },
 

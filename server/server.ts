@@ -1286,6 +1286,15 @@ async function gate(
   policyError: string | undefined,
   scope: string,
   noYolo?: string,
+  // Refused in a SCHEDULED job, but a lease may still promote it.
+  //
+  // Split out of noYolo, which used to mean both at once. That conflation is
+  // what made "full access" stop at a login box: a lease is something you
+  // granted by hand, at the keyboard, for the next hour -- the opposite of
+  // unattended -- and treating it like a 3am cron run made the switch not mean
+  // what it says. Nobody being there is the thing worth refusing for, and that
+  // is the job case, which this still covers.
+  unattended?: string,
 ) {
   if (d.action === "deny") throw new Refused(refusal(toolName, d, policyError))
 
@@ -1309,17 +1318,18 @@ async function gate(
     // answer at 3am, so the agent was told "the Omarchy bar plugin is not
     // loaded". That reads as a broken UI and invites retrying, when the truth
     // is a rule it will never get past.
-    if (d.action === "ask" && noYolo) {
+    const blocked = noYolo ?? unattended
+    if (d.action === "ask" && blocked) {
       await audit((await loadPolicy()).policy,
-        `job ${JOB_ID}: REFUSED ${toolName} — ${noYolo}, and unattended runs cannot be asked`)
+        `job ${JOB_ID}: REFUSED ${toolName} — ${blocked}, and unattended runs cannot be asked`)
       throw new Refused(
-        `REFUSED: ${noYolo}. A scheduled job runs with nobody watching, so this can never be\n` +
+        `REFUSED: ${blocked}. A scheduled job runs with nobody watching, so this can never be\n` +
         `  approved at the time. It is not a fault and retrying will not help — say in your report\n` +
         `  that this step needs a person.`)
     }
 
     // On the list, so it was approved when the job was created.
-    if (d.action === "ask" && !noYolo) {
+    if (d.action === "ask" && !blocked) {
       await audit((await loadPolicy()).policy, `job ${JOB_ID}: ${toolName} (${cap}) -- pre-approved when the job was created`)
       return
     }
@@ -2605,6 +2615,11 @@ server.registerTool(
         "desktop_type", "secret",
         decideGlobal(policy, "secret", `a password into ${w.class} — "${w.title}"`),
         error, `secret:${w.class}`,
+        // A lease covers this. You granted it by hand, for the next hour, to
+        // get work done -- being stopped at a login box is exactly what you
+        // were buying your way past. A scheduled run is the different case,
+        // and it is still refused.
+        undefined,
         "a password is never typed unattended",
       )
     }
@@ -3291,6 +3306,7 @@ server.registerTool(
         "desktop_browser_type", "secret",
         decideGlobal(policy, "secret", `a password into the page at [${args.ref}]`),
         perr, `secret:browser`,
+        undefined,
         "a password is never typed unattended",
       )
     }

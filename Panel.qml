@@ -1395,7 +1395,7 @@ Panel {
                                     },
                                     {
                                         k: "secret",
-                                        d: "Type a password or code — always asks, a lease never covers it"
+                                        d: "Type a password or code — asks once; full access covers it, a schedule never does"
                                     },
                                 ]
 
