@@ -1207,6 +1207,23 @@ Panel {
 
                         SettingRow {
                             width: parent.width
+                            label: "answer timeout"
+                            fontFamily: root.fontFamily
+                            help: "Seconds to wait for the planner before giving up. Fine at 90 for a hosted model; a free tier or a local one on a busy machine can need several times that. Too low reads as the request not working, rather than as the model being slow."
+                            NumberField {
+                                from: 15
+                                to: 600
+                                stepSize: 15
+                                value: root.s("ai.timeoutSeconds", 90)
+                                fontFamily: root.fontFamily
+                                onModified: function (v) {
+                                    root.setCfg("ai.timeoutSeconds", v);
+                                }
+                            }
+                        }
+
+                        SettingRow {
+                            width: parent.width
                             label: "confirm spoken commands"
                             fontFamily: root.fontFamily
                             help: "Anything an AI decided always asks, whatever this says."

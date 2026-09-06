@@ -161,6 +161,29 @@ export function pickProvider(preference: string, _tier: "local" | "any"): Provid
  */
 export type Answer = { text: string; failure?: string }
 
+/**
+ * How long to wait for a planning answer, in milliseconds.
+ *
+ * Configurable because the right number is a property of the model, not of
+ * this plugin: a hosted Sonnet answers this prompt in a few seconds, and a
+ * free-tier or local model on a busy machine can take minutes. 90s was picked
+ * for the former and silently failed the latter -- and, until the previous
+ * commit, failed it in a way that read as "nothing matched".
+ *
+ * 0 or unset keeps each provider's own default, which is what someone who has
+ * not thought about it wants.
+ */
+function configuredTimeoutMs(fallback: number): number {
+  try {
+    const raw = JSON.parse(
+      require("node:fs").readFileSync(
+        `${process.env.HOME}/.config/desktop-agent/settings.json`, "utf8"))
+    const secs = Number(raw?.ai?.timeoutSeconds)
+    if (Number.isFinite(secs) && secs > 0) return Math.round(secs * 1000)
+  } catch {}
+  return fallback
+}
+
 export async function ask(provider: Provider, prompt: string): Promise<Answer> {
   let proc: ReturnType<typeof Bun.spawn>
   try {
@@ -169,11 +192,14 @@ export async function ask(provider: Provider, prompt: string): Promise<Answer> {
     return { text: "", failure: `${provider.id} could not be started: ${e}` }
   }
 
+  // Read per call, not at module load: the daemon is long-lived and the panel
+  // writes this underneath it.
+  const limitMs = configuredTimeoutMs(provider.timeoutMs)
   let timedOut = false
   const timer = setTimeout(() => {
     timedOut = true
     try { proc.kill() } catch {}
-  }, provider.timeoutMs)
+  }, limitMs)
 
   try {
     const [out, err] = await Promise.all([
@@ -183,7 +209,7 @@ export async function ask(provider: Provider, prompt: string): Promise<Answer> {
     await proc.exited
 
     if (timedOut) {
-      return { text: out, failure: `${provider.id} did not answer within ${Math.round(provider.timeoutMs / 1000)}s` }
+      return { text: out, failure: `${provider.id} did not answer within ${Math.round(limitMs / 1000)}s (raise "answer timeout" in the panel's AI tab if the model is just slow)` }
     }
     if (proc.exitCode !== 0) {
       // First non-empty line of stderr: these CLIs print a stack trace under

@@ -20,6 +20,9 @@ const DEFAULTS: Record<string, unknown> = {
   // so an existing file still parses and anyone who wants it can hand-edit.
   "ai.assist": "route+plan+agent",
   "ai.provider": "auto",
+  // Seconds to wait for a planning answer. Right for a hosted model; a free
+  // tier or a local one on a busy machine can want several times this.
+  "ai.timeoutSeconds": 90,
   "ai.localModel": "llama3.2:3b",
   "command.enabled": true,
   "command.confirm": "destructive-only",

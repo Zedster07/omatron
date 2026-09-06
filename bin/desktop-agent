@@ -185,9 +185,13 @@ print(" ".join(sorted("mcp__desktop__" + t for t in have if "mcp__desktop__" + t
     if [[ ${#probe[@]} -eq 0 ]]; then
       warn "provider \"$prov\" is not one this plugin knows how to probe"
     else
-      out="$(timeout 45 "${probe[@]}" 2>&1)"; rc=$?
+      # The same limit a spoken request would use, so this check agrees with
+      # what actually happens rather than inventing its own patience.
+      lim="$(desktop-agent-config get ai.timeoutSeconds 2>/dev/null)"
+      [[ "$lim" =~ ^[0-9]+$ ]] || lim=90
+      out="$(timeout "$lim" "${probe[@]}" 2>&1)"; rc=$?
       if [[ $rc -eq 124 ]]; then
-        bad "$prov did not answer within 45s — spoken requests will time out and report nothing  (try: $prov)"
+        bad "$prov did not answer within ${lim}s — spoken requests will time out and report nothing  (raise \"answer timeout\" in the panel's AI tab, or try: $prov)"
       elif [[ $rc -ne 0 ]]; then
         bad "$prov exits $rc: $(echo "$out" | grep -m1 . | cut -c1-100)"
       elif ! echo "$out" | grep -q '{'; then
