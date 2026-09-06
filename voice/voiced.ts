@@ -508,7 +508,7 @@ async function runCommand(phrase: string) {
     }
   }
 
-  const assist = await settingStr("ai.assist", "route+plan")
+  const assist = await settingStr("ai.assist", "route+plan+agent")
   const preference = await settingStr("ai.provider", "auto")
 
   // ---- tier 2/3, in one call.

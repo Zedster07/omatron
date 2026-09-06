@@ -630,6 +630,50 @@ def main(argv):
         print("ok")
         return 0
 
+    # ---- which models a provider can actually reach
+    #
+    # Asked of the provider rather than hardcoded, because the honest answer
+    # differs per machine: ollama has whatever you pulled, and opencode fans
+    # out over every API key you have given it -- 129 models here, across
+    # Anthropic, Google and others. A fixed list would be wrong on both.
+    #
+    # claude, codex and gemini have no listing command, so those are the
+    # aliases their CLIs accept. "" means "the CLI's own default", which is
+    # always a valid answer and the right one when nothing is chosen.
+    if cmd == "models":
+        import subprocess as sp
+        prov = (argv[2] if len(argv) > 2 else "").lower()
+
+        def run(cmdline, timeout=20):
+            try:
+                r = sp.run(cmdline, capture_output=True, text=True, timeout=timeout)
+                return r.stdout if r.returncode == 0 else ""
+            except Exception:
+                return ""
+
+        out = []
+        if prov == "ollama":
+            for i, line in enumerate(run(["ollama", "list"]).splitlines()):
+                if i == 0 or not line.strip():
+                    continue          # header
+                out.append(line.split()[0])
+        elif prov == "opencode":
+            out = [l.strip() for l in run(["opencode", "models"]).splitlines() if l.strip()]
+        elif prov == "claude":
+            out = ["sonnet", "opus", "haiku"]
+        elif prov == "codex":
+            out = ["gpt-5.1-codex", "gpt-5.1-codex-mini", "gpt-5.1", "o3"]
+        elif prov == "gemini":
+            out = ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
+        # "auto" resolves at call time, so there is no list to offer.
+
+        # Always first: choosing it means "whatever the CLI would pick", which
+        # is what someone who has not thought about it wants.
+        print("default")
+        for m in out:
+            print(m)
+        return 0
+
     # ---- named credentials the agent can USE but never SEE
     #
     # The point of the store is the token stream. An agent that is handed a

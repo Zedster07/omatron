@@ -137,6 +137,41 @@ Panel {
     property bool yoloAllowed: true
     property bool policyMaster: true
 
+    // Models the selected provider can actually reach.
+    //
+    // Re-asked whenever the provider changes, because the answer is different
+    // per machine and per provider -- ollama lists what you pulled, opencode
+    // fans out over every API key it has. A fixed list would be wrong for both.
+    property var models: []
+    property string modelsFor: ""
+    Process {
+        id: modelsProc
+        stdout: SplitParser {
+            onRead: function (line) {
+                var t = String(line).trim();
+                if (t !== "")
+                    root.models = root.models.concat([t]);
+            }
+        }
+    }
+    function loadModels(provider) {
+        if (root.modelsFor === provider && root.models.length)
+            return;
+        root.modelsFor = provider;
+        root.models = [];
+        modelsProc.running = false;
+        modelsProc.command = ["desktop-agent-config", "models", provider];
+        modelsProc.running = true;
+    }
+    // Per provider, so switching away and back restores the choice instead of
+    // silently handing gemini a model named "sonnet".
+    function modelFor(provider) {
+        var v = root.s("ai.model." + provider, "");
+        if (v === "" && provider === "claude")
+            v = root.s("ai.claudeModel", "");   // what this setting used to be called
+        return v === "" ? "default" : v;
+    }
+
     // The capability table. Read as JSON in one go rather than a process per
     // row: twelve capabilities is twelve subprocesses on every panel open.
     property var caps: ({})
@@ -211,6 +246,7 @@ Panel {
                 policyMasterProc.running = true;
                 yoloAllowedProc.running = true;
                 capsProc.running = true;
+        root.loadModels(root.s("ai.provider", "auto"));
             }
         }
     }
@@ -1114,34 +1150,23 @@ Panel {
                         spacing: Style.spacing.xxl
                         visible: root.tab === 2
 
-                        SettingRow {
+                        // The four assistance tiers were one dropdown, and the
+                        // three lesser ones only ever described what the plugin
+                        // does with less of itself switched on. Nobody picks
+                        // "route" on purpose -- they pick it once, forget, and
+                        // then wonder why a request that needs the screen came
+                        // back as "I cannot do that".
+                        Text {
                             width: parent.width
-                            label: "assistance"
-                            fontFamily: root.fontFamily
-                            help: {
-                                var v = root.s("ai.assist", "route+plan");
-                                if (v === "off")
-                                    return "Only phrases in the command list work.";
-                                if (v === "route")
-                                    return "When nothing matches, an AI picks from the ready-made list. It can recognise a new wording but cannot write a new command.";
-                                if (v === "route+plan")
-                                    return "The normal setting. Registered phrases answer instantly; everything else goes to an AI that either picks a ready-made command or writes the commands itself, shown for approval first.";
-                                return "Also hands anything that is not expressible as commands to an agent that can see and click the screen. Every action it takes goes through your desktop policy, and a denial stops it.";
-                            }
-                            Dropdown {
-                                width: parent.width
-                                showLabel: false
-                                options: ["off", "route", "route+plan", "route+plan+agent"]
-                                value: root.s("ai.assist", "route+plan")
-                                onChanged: function (v) {
-                                    root.setCfg("ai.assist", v);
-                                }
-                            }
+                            wrapMode: Text.WordWrap
+                            text: "Registered phrases answer instantly. Anything else goes to an AI that either picks a ready-made command or writes one for your approval — and if it needs to see and click the screen, an agent takes it, under your policy."
+                            color: Util.alpha(Color.foreground, 0.62)
+                            font.family: root.fontFamily
+                            font.pixelSize: Style.font.caption
                         }
 
                         SettingRow {
                             width: parent.width
-                            visible: root.s("ai.assist", "route+plan") !== "off"
                             label: "provider"
                             fontFamily: root.fontFamily
                             help: "auto selects an installed CLI agent (Claude, Gemini, Codex, or OpenCode) and falls back to a local Ollama model for planning."
@@ -1152,30 +1177,36 @@ Panel {
                                 value: root.s("ai.provider", "auto")
                                 onChanged: function (v) {
                                     root.setCfg("ai.provider", v);
+                                    root.loadModels(v);
                                 }
                             }
                         }
 
+                        // Follows the provider, because "claude model" was a
+                        // lie on every setting except one: it stayed visible
+                        // and stayed claude's list while the provider said
+                        // gemini. The options are asked of the provider now --
+                        // ollama reports what you have pulled, opencode fans
+                        // out over every API key you gave it.
                         SettingRow {
                             width: parent.width
-                            visible: root.s("ai.assist", "route+plan") !== "off" && root.s("ai.provider", "auto") !== "ollama"
-                            label: "claude model"
+                            visible: root.s("ai.provider", "auto") !== "auto"
+                            label: "model"
                             fontFamily: root.fontFamily
-                            help: "Measured on this workload: sonnet is about 8% faster than opus and 2.5x cheaper per token, with identical answers on every test case. This call is small — a catalogue in, a line of JSON out — which is not the shape that needs the most capable model."
+                            help: root.s("ai.provider", "auto") === "claude" ? "Measured on this workload: sonnet is about 8% faster than opus and 2.5x cheaper per token, with identical answers on every test case. This call is small — a catalogue in, a line of JSON out — which is not the shape that needs the most capable model." : "\"default\" leaves the choice to the CLI, which is usually right. Kept per provider, so switching back restores what you picked."
                             Dropdown {
                                 width: parent.width
                                 showLabel: false
-                                options: ["sonnet", "opus", "default"]
-                                value: root.s("ai.claudeModel", "sonnet")
+                                options: root.models.length ? root.models : ["default"]
+                                value: root.modelFor(root.s("ai.provider", "auto"))
                                 onChanged: function (v) {
-                                    root.setCfg("ai.claudeModel", v === "default" ? "" : v);
+                                    root.setCfg("ai.model." + root.s("ai.provider", "auto"), v === "default" ? "" : v);
                                 }
                             }
                         }
 
                         SettingRow {
                             width: parent.width
-                            visible: root.s("ai.assist", "route+plan") !== "off"
                             label: "confirm spoken commands"
                             fontFamily: root.fontFamily
                             help: "Anything an AI decided always asks, whatever this says."
@@ -1192,7 +1223,6 @@ Panel {
 
                         SettingRow {
                             width: parent.width
-                            visible: root.s("ai.assist", "route+plan") !== "off"
                             label: "agent workspace"
                             fontFamily: root.fontFamily
                             help: "Anything the agent opens lands here, placed silently so it never steals your focus. Set 0 to let it open wherever it likes. This is placement, not permission — what it may touch is the policy's business."
@@ -1210,7 +1240,6 @@ Panel {
 
                         Toggle {
                             width: parent.width
-                            visible: root.s("ai.assist", "route+plan") !== "off"
                             label: "Let other plugins register commands"
                             description: "Each plugin is approved once before its voice commands go live."
                             checked: root.s("command.thirdParty", true)

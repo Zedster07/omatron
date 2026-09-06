@@ -41,14 +41,25 @@ function configuredModel(): string {
 }
 const OLLAMA_MODEL = configuredModel()
 
-/** Which Claude model the CLI should use. Empty means the CLI's own default. */
-function configuredClaudeModel(): string {
+/**
+ * Which model a given provider should use. Empty means the CLI's own default.
+ *
+ * Kept per provider. It used to be a single "claudeModel", which was fine
+ * while claude was the only one whose model could be set -- and wrong the
+ * moment the panel let you choose gemini, because the setting still said
+ * "sonnet" and still looked like it applied.
+ */
+function configuredModel(provider: string): string {
   try {
     const raw = JSON.parse(
       require("node:fs").readFileSync(
         `${process.env.HOME}/.config/desktop-agent/settings.json`, "utf8"))
-    return String(raw?.ai?.claudeModel ?? "")
-  } catch { return "" }
+    const per = raw?.ai?.model?.[provider]
+    if (typeof per === "string" && per) return per
+    // What this setting used to be called, so an existing choice survives.
+    if (provider === "claude") return String(raw?.ai?.claudeModel ?? "")
+  } catch {}
+  return ""
 }
 
 // Ordered by preference, best first.
@@ -72,20 +83,47 @@ const CANDIDATES: Provider[] = [
     // not the shape that needs the most capable model, and the cheaper one is
     // 2.5x less per token.
     argv: p => {
-      const m = process.env.DESKTOP_AGENT_CLAUDE_MODEL || configuredClaudeModel()
+      const m = process.env.DESKTOP_AGENT_CLAUDE_MODEL || configuredModel("claude")
       return m ? ["claude", "-p", "--model", m, p] : ["claude", "-p", p]
     },
     timeoutMs: 90_000,
   },
-  { id: "opencode", kind: "agent", argv: p => ["opencode", "run", p], timeoutMs: 90_000 },
-  { id: "codex",    kind: "agent", argv: p => ["codex", "exec", p],   timeoutMs: 90_000 },
-  { id: "gemini",   kind: "agent", argv: p => ["gemini", "-p", p],    timeoutMs: 90_000 },
+  // Each takes its model the way its own CLI spells it. Unset means the CLI
+  // decides, which is the right default and the only safe one: naming a model
+  // a given install cannot reach fails the call outright.
+  {
+    id: "opencode",
+    kind: "agent",
+    argv: p => {
+      const m = configuredModel("opencode")
+      return m ? ["opencode", "run", "--model", m, p] : ["opencode", "run", p]
+    },
+    timeoutMs: 90_000,
+  },
+  {
+    id: "codex",
+    kind: "agent",
+    argv: p => {
+      const m = configuredModel("codex")
+      return m ? ["codex", "exec", "-m", m, p] : ["codex", "exec", p]
+    },
+    timeoutMs: 90_000,
+  },
+  {
+    id: "gemini",
+    kind: "agent",
+    argv: p => {
+      const m = configuredModel("gemini")
+      return m ? ["gemini", "-m", m, "-p", p] : ["gemini", "-p", p]
+    },
+    timeoutMs: 90_000,
+  },
   {
     id: "ollama",
     kind: "local",
     // --format json constrains decoding to valid JSON, which matters more for
     // a small model than size does: we need a parseable answer, not prose.
-    argv: p => ["ollama", "run", OLLAMA_MODEL, "--format", "json", p],
+    argv: p => ["ollama", "run", configuredModel("ollama") || OLLAMA_MODEL, "--format", "json", p],
     timeoutMs: 60_000,
   },
 ]

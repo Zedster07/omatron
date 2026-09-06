@@ -11,7 +11,14 @@ const PATH = `${HOME}/.config/desktop-agent/settings.json`
 const DEFAULTS: Record<string, unknown> = {
   "voice.sttMode": "local",
   "voice.biasPrompt": true,
-  "ai.assist": "route+plan",
+  // The full path, and no longer offered as a choice.
+  //
+  // It was four tiers in a dropdown, and the three lesser ones only described
+  // the plugin with parts of itself switched off. Nobody chooses "route" on
+  // purpose -- they choose it once, forget, and later wonder why a request
+  // that needed the screen came back as "I cannot do that". Kept as a setting
+  // so an existing file still parses and anyone who wants it can hand-edit.
+  "ai.assist": "route+plan+agent",
   "ai.provider": "auto",
   "ai.localModel": "llama3.2:3b",
   "command.enabled": true,
