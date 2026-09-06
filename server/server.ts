@@ -2245,6 +2245,8 @@ server.registerTool(
     let region: { x: number; y: number; w: number; h: number }
     let label: string
     let capArgs: string[]
+    // The window this capture claims to be of, when it is of one at all.
+    let target: Win | null = null
 
     if (sel && monNames.has(sel)) {
       const m = mons.find((x) => x.name === sel)!
@@ -2261,8 +2263,37 @@ server.registerTool(
       const w = await resolve(sel)
       const d = await decideWindow(policy, "screenshot", "see", w)
       await gate("desktop_screenshot", "screenshot", d, error, `class:${w.class}`)
+
+      // A window not currently on screen cannot be captured, and must not be
+      // faked from the pixels at its coordinates.
+      //
+      // grim photographs a RECTANGLE OF THE OUTPUT, not a window's surface. A
+      // window parked on workspace 10 while the monitor shows workspace 1
+      // still reports geometry, so the old code handed back whatever was
+      // physically at those coordinates and stamped the requested window's
+      // name on it: a capture labelled 'agent-browser — "Dalti Provider"' that
+      // was in fact somebody's YouTube page. Silent, confident, and wrong --
+      // the worst shape a verification tool can fail in, because the label
+      // asserts a provenance the pixels do not have.
+      //
+      // Refusing is the honest answer. The agent can switch workspaces and ask
+      // again; what it must never get is plausible pixels under the wrong name.
+      const shown = new Set(mons.map((m) => m.activeWorkspace.id))
+      if (!w.mapped || w.hidden || (!shown.has(w.workspace.id) && !w.pinned)) {
+        throw new Refused(
+          `REFUSED: ${w.class} — "${w.title}" is not on screen right now ` +
+            `(it is on workspace ${w.workspace.name}; ` +
+            `${mons.map((m) => `${m.name} is showing ${m.activeWorkspace.name}`).join(", ")}).\n` +
+            "  A capture is a photograph of the screen, so there is nothing of this window to\n" +
+            "  photograph. Returning the pixels at its coordinates would show you a different\n" +
+            "  window under this one's name.\n" +
+            `  => switch to workspace ${w.workspace.name} with desktop_workspace, then capture again.`,
+        )
+      }
+
       region = { x: w.at[0], y: w.at[1], w: w.size[0], h: w.size[1] }
       label = `window ${w.class} — "${w.title}"`
+      target = w
       capArgs = ["-g", `${region.x},${region.y} ${region.w}x${region.h}`]
     }
 
@@ -2273,6 +2304,11 @@ server.registerTool(
     // Work out which visible windows must be hidden from the capture.
     const activeWs = new Set(mons.map((m) => m.activeWorkspace.id))
     const hide: Win[] = []
+    // Everything else sharing the rectangle. Reported, not hidden: a capture is
+    // whatever the screen shows there, so anything overlapping may be sitting
+    // on top of what was asked for. Being told is what lets a caller doubt a
+    // frame instead of describing it with confidence.
+    const overlapping: Win[] = []
     for (const w of await windows()) {
       if (!w.mapped || w.hidden) continue
       if (!activeWs.has(w.workspace.id) && !w.pinned) continue
@@ -2283,6 +2319,7 @@ server.registerTool(
         w.at[1] + w.size[1] > region.y
       if (!intersects) continue
       if ((await decideWindow(policy, "screenshot", "see", w)).action === "deny") hide.push(w)
+      else if (!target || w.address !== target.address) overlapping.push(w)
     }
 
     if (hide.length && !policy.screenshot.redactDenied) {
@@ -2323,6 +2360,18 @@ server.registerTool(
     if (redacted.length) {
       notes.push("", "blacked out by policy (you may not see these):")
       notes.push(...redacted.map((r) => `  ${r}`))
+    }
+    // Only for a window capture: on a whole-monitor shot everything overlaps
+    // everything, and saying so every time would train the reader to skip it.
+    if (target && overlapping.length) {
+      notes.push(
+        "",
+        "SHARING THIS RECTANGLE — any of these may be in front of the window you asked for:",
+        ...overlapping.map((w) => `  ${w.class} — "${w.title}"`),
+        "A capture is a photograph of the screen, not of a window's own surface. If what you",
+        "see does not match the window named above, one of these is on top: focus it away, or",
+        "focus the target first, then capture again.",
+      )
     }
     notes.push(
       "",
@@ -2374,8 +2423,17 @@ server.registerTool(
           "focus moves keyboard focus. close asks the app to quit; kill force-terminates it. " +
             "float/fullscreen/pin toggle. move and resize need x and y. to_workspace needs workspace.",
         ),
-      x: z.number().optional().describe("For move: pixels to shift horizontally. For resize: width delta."),
-      y: z.number().optional().describe("For move: pixels to shift vertically. For resize: height delta."),
+      // Both are ABSOLUTE. Documented as deltas until someone spent a run
+      // discovering otherwise: every negative "delta" came back "Invalid size",
+      // which reads as a broken tool rather than a wrong description.
+      x: z.number().optional().describe(
+        "ABSOLUTE, not a delta. For move: the new left edge in Hyprland's global logical " +
+          "coordinates. For resize: the new width in pixels.",
+      ),
+      y: z.number().optional().describe(
+        "ABSOLUTE, not a delta. For move: the new top edge in Hyprland's global logical " +
+          "coordinates. For resize: the new height in pixels.",
+      ),
       workspace: z.string().optional().describe('For to_workspace: destination workspace name, e.g. "3".'),
     },
   },
