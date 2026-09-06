@@ -161,6 +161,43 @@ print(" ".join(sorted("mcp__desktop__" + t for t in have if "mcp__desktop__" + t
     warn "kill switch is ON — every gated action refuses"
   fi
 
+  echo; bold "Planning provider"
+  # Installed is not the same as working.
+  #
+  # gemini was on PATH and exited with IneligibleTierError because its login
+  # had lapsed; opencode was on PATH and answered nothing at all. Both surfaced
+  # to the person as "nothing matched, so nothing ran" -- so they went looking
+  # at their phrasing. A provider is only useful if it answers, so ask it.
+  prov="$(desktop-agent-config get ai.provider 2>/dev/null || echo auto)"
+  [[ -z "$prov" || "$prov" == "auto" ]] && prov="$(for c in claude opencode codex gemini ollama; do
+      command -v "$c" >/dev/null 2>&1 && { echo "$c"; break; }; done)"
+  if [[ -z "$prov" ]]; then
+    warn "no planning provider installed — spoken requests fall back to the command list only"
+  else
+    case "$prov" in
+      claude)   probe=(claude -p 'reply with {"ok":1} and nothing else') ;;
+      gemini)   probe=(gemini -p 'reply with {"ok":1} and nothing else') ;;
+      codex)    probe=(codex exec 'reply with {"ok":1} and nothing else') ;;
+      opencode) probe=(opencode run 'reply with {"ok":1} and nothing else') ;;
+      ollama)   probe=(ollama run "$(desktop-agent-config get ai.localModel 2>/dev/null || echo llama3.2:3b)" --format json 'reply with {"ok":1}') ;;
+      *)        probe=() ;;
+    esac
+    if [[ ${#probe[@]} -eq 0 ]]; then
+      warn "provider \"$prov\" is not one this plugin knows how to probe"
+    else
+      out="$(timeout 45 "${probe[@]}" 2>&1)"; rc=$?
+      if [[ $rc -eq 124 ]]; then
+        bad "$prov did not answer within 45s — spoken requests will time out and report nothing  (try: $prov)"
+      elif [[ $rc -ne 0 ]]; then
+        bad "$prov exits $rc: $(echo "$out" | grep -m1 . | cut -c1-100)"
+      elif ! echo "$out" | grep -q '{'; then
+        warn "$prov answered but produced no JSON — planning may not work"
+      else
+        ok "$prov answers"
+      fi
+    fi
+  fi
+
   echo; bold "Agent CLIs (optional — voice works without this)"
   if have bun; then ok "bun ($(command -v bun))"; else warn "bun is missing; the MCP half will not run"; fi
   # tmux is what makes the agent's commands watchable. Without it desktop_run

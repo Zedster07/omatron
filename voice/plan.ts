@@ -63,9 +63,10 @@ Reply with JSON only, no prose:
 If nothing in the list fits, reply {"id": null}.
 Do not invent an id. Only ids from the list above are valid.`
 
-  const raw = await ask(provider, prompt)
-  const json = extractJson(raw)
-  if (!json || !json.id || typeof json.id !== "string") return { result: null, provider: provider.id }
+  const answer = await ask(provider, prompt)
+  const json = extractJson(answer.text)
+  if (!json || !json.id || typeof json.id !== "string")
+    return { result: null, provider: provider.id, failure: answer.failure }
 
   // The model is not trusted to stay inside the list; verify.
   if (!intents.some(i => i.id === json.id)) return { result: null, provider: provider.id }
@@ -130,8 +131,8 @@ Reply with JSON only, no prose and no code fence:
 Use "severity": "destructive" if anything in it closes, deletes, or interrupts something.
 If you cannot do it safely, reply {"steps": null, "reason": "<why>"}.`
 
-  const raw = await ask(provider, prompt)
-  const json = extractJson(raw)
+  const answer = await ask(provider, prompt)
+  const json = extractJson(answer.text)
 
   // Accept a bare `argv` too: models fall back to the older single-command
   // shape often enough that rejecting it would look like a random failure.
@@ -194,7 +195,7 @@ export interface Resolution {
 
 export async function resolveRequest(
   phrase: string, intents: Intent[], preference = "auto", allowAgent = false,
-): Promise<{ result: Resolution | null; provider: string | null; refusal?: string }> {
+): Promise<{ result: Resolution | null; provider: string | null; refusal?: string; failure?: string }> {
   const provider = pickProvider(preference, "any")
   if (!provider) return { result: null, provider: null }
 
@@ -264,9 +265,12 @@ ${allowAgent ? `or
 ` : ""}Use "severity":"destructive" if anything closes, deletes or interrupts something.
 If you cannot do it safely, reply {"kind":"none","reason":"<why>"}.`
 
-  const raw = await ask(provider, prompt)
-  const json = extractJson(raw)
-  if (!json) return { result: null, provider: provider.id }
+  const answer = await ask(provider, prompt)
+  const json = extractJson(answer.text)
+  // A provider that could not answer is not a request that cannot be done.
+  // Carrying the reason up is the difference between "your gemini login has
+  // lapsed" and "nothing matched", which is what this said before.
+  if (!json) return { result: null, provider: provider.id, failure: answer.failure }
 
   if (json.kind === "intent" && typeof json.id === "string") {
     // Never trusted to stay inside the list.

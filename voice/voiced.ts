@@ -521,7 +521,20 @@ async function runCommand(phrase: string) {
   if (!match && assist !== "off") {
     hud({ state: "transcribing", mode: "command", transcript: phrase, matched: "thinking…" })
     const r = await resolveRequest(phrase, intents, preference, assist.includes("agent"))
-    log(`resolve: kind=${r.result?.kind ?? "none"} provider=${r.provider ?? "-"}${r.refusal ? " refusal=" + r.refusal : ""}`)
+    log(`resolve: kind=${r.result?.kind ?? "none"} provider=${r.provider ?? "-"}${r.refusal ? " refusal=" + r.refusal : ""}${r.failure ? " failure=" + r.failure : ""}`)
+
+    // A provider that broke is not a request that cannot be done.
+    //
+    // Both were reported the same way -- "nothing matched, so nothing ran" --
+    // so a lapsed gemini login and an opencode that answered nothing in 90
+    // seconds both looked like the plugin refusing the request. The person
+    // then debugs their phrasing, which was never the problem.
+    if (r.failure) {
+      remember(phrase, `provider failed: ${r.failure}`, "failed")
+      await clearHud({ state: "error", mode: "command", transcript: phrase,
+                       errorText: r.failure }, 5000)
+      return
+    }
     if (r.refusal) {
       remember(phrase, `refused: ${r.refusal}`, "refused")
       await clearHud({ state: "error", mode: "command", transcript: phrase,

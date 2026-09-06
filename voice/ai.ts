@@ -148,15 +148,53 @@ export function pickProvider(preference: string, _tier: "local" | "any"): Provid
   return available[0] ?? null
 }
 
-export async function ask(provider: Provider, prompt: string): Promise<string> {
-  const proc = Bun.spawn(provider.argv(prompt), {
-    stdout: "pipe", stderr: "pipe", stdin: "ignore",
-  })
-  const timer = setTimeout(() => { try { proc.kill() } catch {} }, provider.timeoutMs)
+/**
+ * Why a provider produced nothing, when it produced nothing.
+ *
+ * This used to return "" for every failure, so an unauthenticated CLI, one
+ * that hung past its timeout, and a model that genuinely had no answer were
+ * indistinguishable -- all three surfaced to the person as "nothing matched,
+ * so nothing ran". Measured on this machine: gemini exits with
+ * IneligibleTierError because its login lapsed, and opencode produced zero
+ * bytes in two minutes. Both were reported as the request being unsupported,
+ * which sent someone looking at the wrong thing entirely.
+ */
+export type Answer = { text: string; failure?: string }
+
+export async function ask(provider: Provider, prompt: string): Promise<Answer> {
+  let proc: ReturnType<typeof Bun.spawn>
   try {
-    const out = await new Response(proc.stdout).text()
+    proc = Bun.spawn(provider.argv(prompt), { stdout: "pipe", stderr: "pipe", stdin: "ignore" })
+  } catch (e) {
+    return { text: "", failure: `${provider.id} could not be started: ${e}` }
+  }
+
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    try { proc.kill() } catch {}
+  }, provider.timeoutMs)
+
+  try {
+    const [out, err] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ])
     await proc.exited
-    return out
+
+    if (timedOut) {
+      return { text: out, failure: `${provider.id} did not answer within ${Math.round(provider.timeoutMs / 1000)}s` }
+    }
+    if (proc.exitCode !== 0) {
+      // First non-empty line of stderr: these CLIs print a stack trace under
+      // it, and the first line is the part a person can act on.
+      const why = (err.split("\n").find((l) => l.trim()) ?? "").trim().slice(0, 160)
+      return { text: out, failure: `${provider.id} exited ${proc.exitCode}${why ? `: ${why}` : ""}` }
+    }
+    if (!out.trim()) {
+      return { text: "", failure: `${provider.id} returned nothing` }
+    }
+    return { text: out }
   } finally {
     clearTimeout(timer)
   }
