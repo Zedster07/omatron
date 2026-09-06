@@ -3431,9 +3431,17 @@ server.registerTool(
       "It cannot attach to a browser that was already running.",
     inputSchema: {
       url: z.string().optional().describe("URL to open. Omitted just starts the browser."),
+      reuse_tab: z
+        .boolean()
+        .optional()
+        .describe(
+          "Replace the page in the current tab instead of opening a new one. Off by default, because " +
+            "opening a page should not destroy what you were looking at. Use it when you are deliberately " +
+            "moving on and do not want tabs to accumulate.",
+        ),
     },
   },
-  guard("desktop_browser_open", async (args: { url?: string }) => {
+  guard("desktop_browser_open", async (args: { url?: string; reuse_tab?: boolean }) => {
     const policy = await gateBrowser("desktop_browser_open", args.url ? `open ${args.url}` : "open")
     await browser.ensure({ command: policy.browser.command, headless: policy.browser.headless })
     const st = browser.status()
@@ -3441,9 +3449,26 @@ server.registerTool(
       await audit(policy, `browser open (pid ${st.pid})`)
       return say(`Agent browser is running (pid ${st.pid}).\nProfile: ${st.profile}\nWindow class: ${browser.AGENT_BROWSER_CLASS}`)
     }
-    const page = await browser.navigate(args.url)
-    await audit(policy, `browser navigate ${args.url}`)
-    return say(`Opened ${page.url}\nTitle: ${page.title || "(none)"}\n\nRead it with desktop_browser_read.`)
+    // A new tab unless asked otherwise.
+    //
+    // This used to navigate whichever tab was in front, so "open this page"
+    // silently destroyed the last one -- including, in one run, a login form
+    // with the email already typed into it. "Open" should not be a verb that
+    // loses work. Blank tabs are still reused, so the first open after launch
+    // does not leave the browser's about:blank behind.
+    if (args.reuse_tab) {
+      const page = await browser.navigate(args.url)
+      await audit(policy, `browser navigate ${args.url} (reused the tab)`)
+      return say(`Opened ${page.url} in the current tab.\nTitle: ${page.title || "(none)"}\n\nRead it with desktop_browser_read.`)
+    }
+    const page = await browser.openTab(args.url)
+    await audit(policy, `browser open ${args.url} (tab ${page.tabs})`)
+    return say(
+      `Opened ${page.url} in a new tab (${page.tabs} open).\n` +
+        `Title: ${page.title || "(none)"}\n\n` +
+        "You are now working in this tab; the previous one is untouched. " +
+        "Read it with desktop_browser_read.",
+    )
   }),
 )
 

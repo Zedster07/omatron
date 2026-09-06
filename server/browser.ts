@@ -407,6 +407,59 @@ async function withCdp<T>(fn: (send: (m: string, p?: any) => Promise<any>) => Pr
 
 // -------------------------------------------------------------- navigation
 
+/**
+ * Open a page in a NEW tab, and work in it from now on.
+ *
+ * Because "open" should not destroy what was already there. navigate() drives
+ * the tab we are pinned to, which is right for following a link but wrong for
+ * a fresh request: a run that had a half-filled login form in front of it lost
+ * the form -- and the typed-in email with it -- to an unrelated open.
+ *
+ * Blank tabs are reused rather than added to. A browser launches on
+ * about:blank, so opening the first page would otherwise leave an empty tab
+ * behind every single time.
+ */
+export async function openTab(url: string): Promise<{ url: string; title: string; tabs: number }> {
+  const port = requireOurs()
+  const before = (await targets()).filter(isRealPage)
+  const blank = before.find((t) => t.url === "about:blank" || t.url === "")
+
+  if (blank) {
+    pinTarget(blank.id)
+    const r = await navigate(url)
+    return { ...r, tabs: before.length }
+  }
+
+  // Target.createTarget over the browser-level socket. The /json/new endpoint
+  // does the same thing but has changed method and shape between Chromium
+  // versions; this one has not.
+  const ver = (await (await fetch(`http://127.0.0.1:${port}/json/version`, {
+    signal: AbortSignal.timeout(5000),
+  })).json()) as { webSocketDebuggerUrl?: string }
+  if (!ver.webSocketDebuggerUrl) throw new Error("the browser did not report a debugger endpoint")
+
+  const ws = new WebSocket(ver.webSocketDebuggerUrl)
+  const id: string = await new Promise((ok, fail) => {
+    const timer = setTimeout(() => fail(new Error("timed out opening a tab")), 10_000)
+    ws.onopen = () => ws.send(JSON.stringify({ id: 1, method: "Target.createTarget", params: { url } }))
+    ws.onmessage = (e) => {
+      try {
+        const m = JSON.parse(String(e.data))
+        if (m.id !== 1) return
+        clearTimeout(timer)
+        m.error ? fail(new Error(m.error.message ?? "could not open a tab")) : ok(m.result.targetId)
+      } catch {}
+    }
+    ws.onerror = () => { clearTimeout(timer); fail(new Error("could not reach the browser to open a tab")) }
+  }).finally(() => ws.close()) as Promise<string>
+
+  // Work in the tab we just made, not whichever one Chromium lists first.
+  pinTarget(id)
+  await sleep(600)
+  const page = await currentPage()
+  return { ...page, tabs: before.length + 1 }
+}
+
 export async function navigate(url: string): Promise<{ url: string; title: string }> {
   return withCdp(async (send) => {
     await send("Page.enable")
