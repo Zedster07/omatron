@@ -419,6 +419,31 @@ export async function click(ref: number): Promise<string> {
   })
 }
 
+/**
+ * Is this element a password field?
+ *
+ * Asked over CDP rather than inferred from a label or taken from the caller,
+ * because the browser already knows: input type=password, or the autocomplete
+ * hints browsers themselves use to decide what to offer to fill.
+ */
+export async function isSecretField(ref: number): Promise<boolean> {
+  return withCdp(async (send) => {
+    await send("DOM.enable")
+    const objectId = await resolve(send, ref)
+    const { result } = await send("Runtime.callFunctionOn", {
+      objectId,
+      returnByValue: true,
+      functionDeclaration: `function () {
+        var t = (this.type || '').toLowerCase();
+        if (t === 'password') return true;
+        var ac = (this.getAttribute('autocomplete') || '').toLowerCase();
+        return ac === 'current-password' || ac === 'new-password' || ac === 'one-time-code';
+      }`,
+    })
+    return result?.value === true
+  })
+}
+
 export async function type(ref: number, text: string, submit = false): Promise<string> {
   return withCdp(async (send) => {
     await send("DOM.enable")

@@ -97,7 +97,25 @@
     // of your logins. Reading pages through it replaces screenshots for
     // anything on the web. Starts at "ask" so you see the first few; there is
     // little reason to keep it there once you have watched it work.
-    "browser": "ask"
+    "browser": "ask",
+    // Typing a password, token, PIN or recovery code.
+    //
+    // Separate from "type" because that one has to be usable: a setup where
+    // every keystroke raises a card gets set to "allow" within a day, and then
+    // a credential goes in with nothing shown. This asks whichever way "type"
+    // is set, and a full-access lease does not promote it -- the point of the
+    // lease is to stop interrupting you about ordinary work, and this is not
+    // ordinary work.
+    //
+    // In the browser it is the field that decides, read over CDP: input
+    // type=password, or an autocomplete of current-password, new-password or
+    // one-time-code. On a native window there is nothing to read, so it
+    // depends on the agent saying so.
+    //
+    // "allow" is yours to set if you want it unattended, the same way
+    // run.commands lets you name an otherwise-destructive command. Nothing
+    // else will set it for you.
+    "secret": "ask"
   },
 
   // --------------------------------------------------------------------------

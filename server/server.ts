@@ -310,10 +310,12 @@ type Capability =
   | "run"
   | "write"
   | "browser"
+  | "secret"
 
 const RANK: Record<Action, number> = { allow: 0, ask: 1, deny: 2 }
 const WINDOW_VERBS: WindowVerb[] = ["see", "focus", "manage", "input"]
 const ALL_CAPS: Capability[] = [
+  "secret",
   "observe",
   "screenshot",
   "workspace",
@@ -2570,13 +2572,42 @@ server.registerTool(
         .string()
         .optional()
         .describe("Override the paste shortcut. Defaults to ctrl+v, or ctrl+shift+v for terminals."),
+      secret: z
+        .boolean()
+        .optional()
+        .describe(
+          "Set this when the text is a password, token, PIN or recovery code. It routes the call " +
+            "through the \"secret\" capability, which asks every time and is never auto-approved by a " +
+            "full-access lease — so the person sees a card naming the window before anything is typed. " +
+            "Say so rather than typing a credential silently.",
+        ),
     },
   },
-  guard("desktop_type", async (args: { text: string; window?: string; submit?: boolean; paste_chord?: string }) => {
+  guard("desktop_type", async (args: { text: string; window?: string; submit?: boolean; paste_chord?: string; secret?: boolean }) => {
     const { policy, error } = await loadPolicy()
     const w = await resolve(args.window)
     const d = await decideWindow(policy, "type", "input", w)
     await gate("desktop_type", "type", d, error, `class:${w.class}`)
+
+    // A credential gets its own gate on top of the ordinary one.
+    //
+    // Without this there was no gate at all: "type" is a single capability, so
+    // a policy with type: "allow" -- which is what a working setup tends to
+    // drift to, since asking about every keystroke is unusable -- typed a
+    // password with no card shown. The lease was not even involved; an "allow"
+    // returns from gate() before the lease is consulted.
+    //
+    // Declared by the caller here because a native window offers nothing to
+    // detect from. The browser path does not have to take anyone's word for
+    // it: it reads the field's own type over CDP.
+    if (args.secret) {
+      await gate(
+        "desktop_type", "secret",
+        decideGlobal(policy, "secret", `a password into ${w.class} — "${w.title}"`),
+        error, `secret:${w.class}`,
+        "a password is never typed unattended",
+      )
+    }
 
     if (args.text.length > policy.maxTextLength) {
       throw new Refused(
@@ -3249,6 +3280,21 @@ server.registerTool(
           `(${policy.maxTextLength}) in ${policyPath()}`,
       )
     }
+    // Ask the field what it is before typing into it.
+    //
+    // No declaration to trust and no heuristic on the text: the page already
+    // knows whether this is a password box, so the gate is driven by the DOM.
+    // An agent that "forgets" to flag a credential cannot get past this one.
+    const { error: perr } = await loadPolicy()
+    if (await browser.isSecretField(args.ref)) {
+      await gate(
+        "desktop_browser_type", "secret",
+        decideGlobal(policy, "secret", `a password into the page at [${args.ref}]`),
+        perr, `secret:browser`,
+        "a password is never typed unattended",
+      )
+    }
+
     const msg = await browser.type(args.ref, args.text, args.submit === true)
     await audit(policy, `browser type ${args.text.length} chars into [${args.ref}]`)
     return say(`${msg}\n\nRe-read the page to see what changed.`)

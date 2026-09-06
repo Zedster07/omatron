@@ -1393,6 +1393,10 @@ Panel {
                                         k: "browser",
                                         d: "Its own browser: empty profile, none of your logins"
                                     },
+                                    {
+                                        k: "secret",
+                                        d: "Type a password or code — always asks, a lease never covers it"
+                                    },
                                 ]
 
                                 Item {
