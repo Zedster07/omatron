@@ -690,14 +690,19 @@ def main(argv):
         import re
         store = os.path.join(os.path.dirname(CFG), "secrets.json")
 
-        def load():
+        # Named apart from the module-level load()/save() on purpose. Defining
+        # `def load()` here made the name function-local for the WHOLE of
+        # main(), so every earlier branch calling the module-level one --
+        # get, set, all -- died with UnboundLocalError. Python scopes by
+        # function, not by block, and the failure lands nowhere near the cause.
+        def _load_secrets():
             try:
                 with open(store) as f:
                     return json.load(f)
             except Exception:
                 return {}
 
-        def save(d):
+        def _save_secrets(d):
             os.makedirs(os.path.dirname(store), exist_ok=True)
             fd = os.open(store + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, "w") as f:
@@ -705,7 +710,7 @@ def main(argv):
             os.replace(store + ".tmp", store)
             os.chmod(store, 0o600)
 
-        d = load()
+        d = _load_secrets()
 
         if cmd == "secret-list":
             # Names and notes only. A tool that prints the values it is meant
@@ -721,7 +726,7 @@ def main(argv):
                 print(f"no secret named {name!r}")
                 return 1
             del d[name]
-            save(d)
+            _save_secrets(d)
             print(f"removed {name}")
             return 0
 
@@ -741,7 +746,7 @@ def main(argv):
             print("no value given")
             return 1
         d[name] = {"value": value, "note": " ".join(argv[3:])}
-        save(d)
+        _save_secrets(d)
         print(f"stored {name}")   # never the value
         return 0
 
