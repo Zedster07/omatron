@@ -350,6 +350,8 @@ type LaunchEntry = { command: string[]; args?: boolean; action?: Action }
 type Policy = {
   enabled: boolean
   capabilities: Partial<Record<Capability, Action>>
+  /** Entries in "capabilities" this build ignores, verbatim, for reporting. */
+  capUnknown: string[]
   agents: Record<string, Action | Partial<Record<Capability, Action>>>
   workspaces: Record<string, Action>
   apps: Record<string, Action | Partial<Record<WindowVerb, Action>>>
@@ -370,6 +372,7 @@ type Policy = {
 const CLOSED: Policy = {
   enabled: false,
   capabilities: {},
+  capUnknown: [],
   agents: {},
   workspaces: {},
   apps: {},
@@ -599,10 +602,30 @@ async function loadPolicy(): Promise<{ policy: Policy; error?: string }> {
     if (a) workspaces[pattern] = a
   }
 
+  // Anything in "capabilities" that this build will never consult.
+  //
+  // Both halves used to vanish without a word: a key nobody recognises
+  // ("mose": "allow") and a value nobody recognises ("mouse": "allowed") were
+  // each dropped by the loop below, leaving the real capability at its default
+  // and nothing anywhere saying so. You edit the file, it saves, it is valid
+  // JSON, no error appears -- and you conclude you granted something. Twice in
+  // one session that cost somebody a whole round of debugging.
+  //
+  // Not fatal: refusing to load over a typo would take the desktop down for a
+  // misspelling. Loud instead -- desktop_policy names them, and so does doctor.
+  const capUnknown: string[] = []
   const capabilities: Policy["capabilities"] = {}
   for (const [k, v] of Object.entries(parsed.capabilities ?? {})) {
     const a = coerceAction(v)
-    if (a) (capabilities as any)[k] = a
+    if (!ALL_CAPS.includes(k as Capability)) {
+      capUnknown.push(`"${k}": not a capability this build knows`)
+      continue
+    }
+    if (!a) {
+      capUnknown.push(`"${k}": ${JSON.stringify(v)} is not "allow", "ask" or "deny"`)
+      continue
+    }
+    ;(capabilities as any)[k] = a
   }
 
   // Per-identity limits. See the CAVEAT in the policy file: MCP cannot tell
@@ -661,6 +684,7 @@ async function loadPolicy(): Promise<{ policy: Policy; error?: string }> {
     // first. A flag file cannot mis-target and needs nothing running to hold.
     enabled: parsed.enabled !== false && !killSwitchEngaged(),
     capabilities,
+    capUnknown,
     agents,
     workspaces,
     apps,
@@ -2073,6 +2097,14 @@ server.registerTool(
 
     out.push("", "capabilities (unset = ask):")
     for (const cap of ALL_CAPS) out.push(`  ${cap.padEnd(11)} ${coerceAction(policy.capabilities[cap], "ask")}`)
+    // Said here because this is where someone looks when a change did not
+    // take. Silence was the bug: the line is in the file, the file is valid,
+    // and the setting it names does nothing.
+    if (policy.capUnknown.length) {
+      out.push("", "IGNORED — these lines in \"capabilities\" have NO EFFECT:")
+      for (const u of policy.capUnknown) out.push(`  ${u}`)
+      out.push(`  the capabilities this build reads are: ${ALL_CAPS.join(", ")}`)
+    }
 
     out.push("", `per-identity limits for "${IDENTITY}" (last match wins):`)
     if (!Object.keys(policy.agents).length) {
