@@ -48,7 +48,10 @@ const CDP_TIMEOUT_MS = 15_000
 /** Workspace the agent-browser placement rule was last registered for. */
 let ruleFor = 0
 
-type Live = { proc: ReturnType<typeof Bun.spawn>; port: number; startedAt: number }
+// `proc` is null for a browser we adopted rather than spawned -- there is no
+// child handle for someone else's process, so liveness and shutdown go through
+// the pid instead.
+type Live = { proc: ReturnType<typeof Bun.spawn> | null; port: number; startedAt: number; pid?: number }
 let live: Live | null = null
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -77,7 +80,15 @@ function browserBinary(preferred?: string): string {
 
 /** True when the process we spawned is still alive. */
 function alive(): boolean {
-  return live !== null && live.proc.exitCode === null && live.proc.signalCode === null
+  if (live === null) return false
+  if (live.proc) return live.proc.exitCode === null && live.proc.signalCode === null
+  // Adopted: no handle, so ask the kernel whether the pid is still there.
+  try {
+    process.kill(live.pid!, 0)
+    return true
+  } catch {
+    return false
+  }
 }
 
 export type BrowserStatus = {
@@ -93,7 +104,7 @@ export function status(): BrowserStatus {
   return {
     running: true,
     port: live!.port,
-    pid: live!.proc.pid,
+    pid: live!.pid ?? live!.proc?.pid,
     profile: PROFILE_DIR,
     uptimeMs: Date.now() - live!.startedAt,
   }
@@ -106,8 +117,70 @@ export function status(): BrowserStatus {
  * first-run wizard, and a window class distinct from the user's browsers so
  * the window rules in policy.jsonc can tell the two apart.
  */
+/**
+ * Find a browser already running on OUR profile, and take it over.
+ *
+ * `live` is per-process, and every Claude Code session spawns its own MCP
+ * server -- so the second session finds live === null, tries to launch, and
+ * Chromium refuses to run twice on one profile. It does not error: it hands
+ * the URL to the running instance, which opens it, and the launcher exits 0.
+ * The plugin then reported "browser exited immediately (code 0)" while a fresh
+ * about:blank tab appeared in a browser it had decided did not exist.
+ *
+ * That is the whole of the reported bug: opening a page in an already-open
+ * browser always failed and left a blank tab, and the only cure was closing
+ * the browser so the profile came free.
+ *
+ * Adopting does not weaken "never attach to a browser we did not start". The
+ * profile directory belongs to this plugin and nothing else uses it, so a
+ * Chromium holding it IS the agent browser -- possibly one an earlier session
+ * of ours left behind. The user's own Chromium, 1Password and Obsidian are on
+ * other profiles and remain as unreachable as before.
+ */
+async function adopt(): Promise<number | null> {
+  // SingletonLock is a symlink named "<host>-<pid>" -- Chromium's own record of
+  // which process owns the profile. DevToolsActivePort would be simpler but is
+  // not always written, so the pid is the dependable route.
+  let pid: number | null = null
+  try {
+    const link = await fs.readlink(path.join(PROFILE_DIR, "SingletonLock"))
+    const n = Number(link.split("-").pop())
+    if (Number.isFinite(n) && n > 0) pid = n
+  } catch {
+    return null
+  }
+  if (!pid) return null
+
+  let port: number | null = null
+  try {
+    const cmdline = (await fs.readFile(`/proc/${pid}/cmdline`, "utf8")).split("\0")
+    const flag = cmdline.find((a) => a.startsWith("--remote-debugging-port="))
+    const n = Number(flag?.split("=")[1])
+    if (Number.isFinite(n) && n > 0) port = n
+  } catch {
+    return null   // the pid is stale; the lock outlived its owner
+  }
+  if (!port) return null
+
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1500) })
+    if (!r.ok) return null
+  } catch {
+    return null
+  }
+  // No process handle to keep: we did not spawn it. close() falls back to the
+  // pid, which is what the lock gave us.
+  live = { proc: null, port, startedAt: Date.now(), pid }
+  return port
+}
+
 export async function ensure(opts: { command?: string; headless?: boolean } = {}): Promise<number> {
   if (alive()) return live!.port
+
+  // Someone else's server process may have started it. Take it over rather
+  // than launching into a profile that is already taken.
+  const adopted = await adopt()
+  if (adopted !== null) return adopted
 
   const bin = browserBinary(opts.command)
   await fs.mkdir(PROFILE_DIR, { recursive: true, mode: 0o700 })
@@ -166,7 +239,7 @@ export async function ensure(opts: { command?: string; headless?: boolean } = {}
         signal: AbortSignal.timeout(1000),
       })
       if (r.ok) {
-        live = { proc, port, startedAt: started }
+        live = { proc, port, startedAt: started, pid: proc.pid }
         return port
       }
     } catch {
@@ -187,7 +260,8 @@ export async function close(): Promise<boolean> {
     live = null
     return false
   }
-  live!.proc.kill()
+  if (live!.proc) live!.proc.kill()
+  else process.kill(live!.pid!, "SIGTERM")
   // Give it a moment to go quietly before reporting it closed.
   for (let i = 0; i < 20 && alive(); i++) await sleep(100)
   live = null
