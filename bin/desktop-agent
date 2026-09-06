@@ -114,12 +114,39 @@ doctor() {
     # cheapest way to point at the other half.
     for a in "$HOME/.claude/agents"/*.md; do
       [[ -e "$a" ]] || continue
-      if grep -qi 'do not enter passwords\|desktop_type' "$a" 2>/dev/null; then
-        if grep -q 'desktop_type_secret' "$a" 2>/dev/null; then
-          ok "agent rules in $(basename "$a") know about desktop_type_secret"
-        else
-          warn "$a has its own rules about typing, and predates desktop_type_secret — an agent reading it may refuse credentials the policy allows"
-        fi
+      grep -qi 'mcp__desktop__\|do not enter passwords' "$a" 2>/dev/null || continue
+
+      if grep -qi 'do not enter passwords' "$a" 2>/dev/null && ! grep -q 'desktop_type_secret' "$a" 2>/dev/null; then
+        warn "$a has its own rules about typing, and predates desktop_type_secret — an agent reading it may refuse credentials the policy allows"
+      fi
+
+      # The frontmatter "tools:" allowlist, checked against what the server
+      # actually registers.
+      #
+      # This is the failure with no symptom: an allowlist pinned to the tool
+      # set of the day it was written silently hides every tool added since.
+      # desktop_policy cheerfully advertised desktop_type_secret to an agent
+      # that had no such tool, so it read as the plugin lying rather than as a
+      # stale list. Nothing else on the machine compares these two.
+      missing=$(AGENT_MD="$a" SERVER_TS="$PLUGIN_DIR/server/server.ts" python3 -c '
+import re, os, sys
+text = open(os.environ["AGENT_MD"]).read()
+fm = text.split("---", 2)
+if len(fm) < 3:
+    sys.exit(0)
+m = re.search(r"^tools:\s*(.+)$", fm[1], re.M)
+if not m:
+    sys.exit(0)
+listed = {t.strip() for t in m.group(1).split(",")}
+have = set(re.findall(r"server\.registerTool\(\s*\"(desktop_[a-z_]+)\"", open(os.environ["SERVER_TS"]).read()))
+print(" ".join(sorted("mcp__desktop__" + t for t in have if "mcp__desktop__" + t not in listed)))
+')
+      if [[ -n "$missing" ]]; then
+        warn "$(basename "$a") pins a tools: allowlist missing $(echo "$missing" | wc -w) of this plugin's tools — an agent using it cannot call them, however the policy is set"
+        for t in $missing; do echo "        $t"; done
+        echo "        append them to the tools: line, or delete the line to allow all"
+      else
+        ok "agent tools in $(basename "$a") are up to date"
       fi
     done
 
