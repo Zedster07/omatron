@@ -66,6 +66,29 @@ const TMP = process.env.XDG_RUNTIME_DIR
   ? path.join(process.env.XDG_RUNTIME_DIR, "desktop-agent")
   : path.join(os.tmpdir(), `desktop-agent-${process.getuid?.() ?? "user"}`)
 
+// Where a capture goes when the caller asks to keep it.
+//
+// Under state rather than XDG_RUNTIME_DIR because the point is to still be
+// there after the run -- and after a logout, which is when someone actually
+// goes looking for what the agent saw.
+const SHOTS = path.join(os.homedir(), ".local", "state", "desktop-agent", "shots")
+
+/**
+ * Keep the last 40 saved captures and delete the rest.
+ *
+ * Unbounded, this is a folder of desktop photographs that grows for as long as
+ * the plugin is installed and that nobody ever thinks to look in. A cap is not
+ * a privacy control -- the person can empty the folder -- but "the last few
+ * runs" is what the feature is actually for.
+ */
+async function pruneShots(keep = 40) {
+  try {
+    const names = (await fs.readdir(SHOTS)).filter((n) => n.endsWith(".png")).sort()
+    for (const n of names.slice(0, Math.max(0, names.length - keep)))
+      await fs.rm(path.join(SHOTS, n), { force: true }).catch(() => {})
+  } catch {}
+}
+
 /**
  * Which identity the "agents" policy section is matched against. MCP gives the
  * server no way to see which Claude Code subagent is calling, so this is fixed
@@ -2191,9 +2214,17 @@ server.registerTool(
           'What to capture: omit or "screen" for the focused monitor, a monitor name such as "eDP-1", ' +
             "or a window address/class/title fragment to capture just that window.",
         ),
+      save: z
+        .boolean()
+        .optional()
+        .describe(
+          "Keep the capture as a PNG the person can open afterwards, and report its path. " +
+            "Off by default: a capture left on disk is a picture of someone's desktop. " +
+            "Use it when your report needs evidence rather than just your own reading of the screen.",
+        ),
     },
   },
-  guard("desktop_screenshot", async (args: { target?: string }) => {
+  guard("desktop_screenshot", async (args: { target?: string; save?: boolean }) => {
     const { policy, error } = await loadPolicy()
     const sel = args.target?.trim()
     const mons = await monitors()
@@ -2259,6 +2290,7 @@ server.registerTool(
     // two of them can reach the same millisecond.
     const raw = path.join(TMP, `shot-${Date.now()}-${process.pid}.png`)
     let processed: string | null = null
+    let kept: string | null = null
 
     // Both files must go even if magick, the read, or the policy throws below.
     // A leaked capture is a screenshot of the user's desktop left on disk.
@@ -2286,6 +2318,24 @@ server.registerTool(
         `not image pixels: image (px,py) maps to global (${region.x} + px*${(region.w / (size.w || 1)).toFixed(4)}, ` +
         `${region.y} + py*${(region.h / (size.h || 1)).toFixed(4)}).`,
     )
+
+    // Keeping it is the REDACTED file, never the raw grab.
+    //
+    // The alternative people reach for is allowing grim in run.commands, which
+    // is the one thing that must not happen: grim is desktop_screenshot minus
+    // the redaction, so it would hand over exactly the password managers and
+    // 2FA windows blacked out above. An artifact is worth having; an
+    // unredacted one is not.
+    if (args.save) {
+      await fs.mkdir(SHOTS, { recursive: true, mode: 0o700 })
+      await fs.chmod(SHOTS, 0o700).catch(() => {})
+      kept = path.join(SHOTS, `shot-${Date.now()}-${process.pid}.png`)
+      await fs.copyFile(file, kept)
+      await fs.chmod(kept, 0o600).catch(() => {})
+      await pruneShots()
+      notes.splice(1, 0, `saved to ${kept}`)
+      await audit(policy, `screenshot saved ${kept}`)
+    }
 
     const bytes = await fs.readFile(file)
     return say(notes.join("\n"), [{ type: "image", data: bytes.toString("base64"), mimeType: "image/png" }])

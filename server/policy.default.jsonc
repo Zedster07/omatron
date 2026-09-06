@@ -445,7 +445,11 @@
       "wtype": "deny", // = desktop_type
       "dotool": "deny",
       "wlrctl": "deny",
-      "grim": "deny", // = desktop_screenshot, but with NO redaction
+      // = desktop_screenshot, but with NO redaction. If you want a PNG on disk
+      // to look at afterwards, that is desktop_screenshot with save: true --
+      // it keeps the REDACTED capture. Allowing grim to get artifacts trades
+      // away the password managers and 2FA windows the redaction exists for.
+      "grim": "deny",
       "slurp": "deny",
       "wf-recorder": "deny",
       "wl-copy": "deny", // clipboard is how desktop_type moves text
