@@ -180,6 +180,9 @@ export async function ensure(opts: { command?: string; headless?: boolean } = {}
 }
 
 export async function close(): Promise<boolean> {
+  // The pinned tab belongs to the browser that is going away. Leaving the id
+  // behind would have the next session hunting for a target that cannot exist.
+  pinned = null
   if (!alive()) {
     live = null
     return false
@@ -215,11 +218,55 @@ async function targets(): Promise<Target[]> {
 }
 
 /** The page the agent is working in: the first real page target. */
+/**
+ * The tab this session is working in, remembered rather than re-guessed.
+ *
+ * Cleared when the browser is closed; survives everything else.
+ */
+let pinned: string | null = null
+
+/** Chromium's own pages, not devtools or an extension's background page. */
+const isRealPage = (t: Target) =>
+  t.type === "page" &&
+  !!t.webSocketDebuggerUrl &&
+  !t.url.startsWith("devtools://") &&
+  !t.url.startsWith("chrome-extension://")
+
+/**
+ * Which tab are we driving?
+ *
+ * This used to be `pages[0]` -- whatever /json/list happened to put first --
+ * re-decided on EVERY cdp call. Two things follow from that, and both were
+ * reported as "it opens about:blank and never recovers":
+ *
+ *   1. The order tracks tab ACTIVITY. Activating a tab moves it to the front,
+ *      so navigate() could drive one tab and the read() straight after it read
+ *      a different one. Measured: activating the blank tab put about:blank at
+ *      pages[0] while the real page sat at pages[2].
+ *   2. The browser is launched on about:blank and nothing ever closes it, so
+ *      there is always a blank tab in the running to be picked -- which is why
+ *      the only reliable cure was closing the whole browser.
+ *
+ * So the tab is pinned. A fresh pick prefers a page that is actually
+ * somewhere, and falls back to the blank one only when that is all there is.
+ */
 async function pageTarget(): Promise<Target> {
   const all = await targets()
-  const pages = all.filter((t) => t.type === "page" && t.webSocketDebuggerUrl)
+  const pages = all.filter(isRealPage)
   if (!pages.length) throw new Error("the agent browser has no open page")
-  return pages[0]
+
+  if (pinned) {
+    const still = pages.find((t) => t.id === pinned)
+    if (still) return still
+  }
+  const chosen = pages.find((t) => t.url !== "about:blank" && t.url !== "") ?? pages[0]
+  pinned = chosen.id
+  return chosen
+}
+
+/** Work in this tab from now on. Called when we deliberately open one. */
+export function pinTarget(id: string | null) {
+  pinned = id
 }
 
 /**
