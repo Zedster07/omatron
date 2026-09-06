@@ -486,6 +486,39 @@ and a naive match rewrites that instead of the setting.
 (`workspaces`, `apps`, `paths`, `run.commands`) are still edited there: they
 are rule sets, not switches. "Edit policy" in the Policy tab opens it.
 
+## Logging in without handing over the password
+
+The agent can use a credential without ever seeing it.
+
+```bash
+desktop-agent-config secret-add dalti-test "dev login for the Dalti app"
+# value is read from stdin or prompted for; never passed as an argument
+desktop-agent-config secret-list      # names and notes, never values
+desktop-agent-config secret-rm dalti-test
+```
+
+Then it types by name — `desktop_type_secret` for a window,
+`desktop_browser_type_secret` for a page field:
+
+```
+desktop_browser_type_secret({ ref: 12, name: "dalti-test", submit: true })
+```
+
+The value is resolved by the server and goes straight to the field. It never
+enters the model's context, its transcript, or the audit log, which records the
+name only. That is the whole point: a password handed to an agent is a password
+in every log that agent's output touches, so no policy setting can make that
+safe — and an agent that refuses one relayed to it is right. Naming it sidesteps
+the question rather than arguing with it.
+
+The store is `~/.config/desktop-agent/secrets.json`, mode 0600. It is plain
+JSON, not a keyring: it holds throwaway development credentials, and anything
+that matters belongs somewhere with a lock on it.
+
+Typing one is gated by the `secret` capability — it asks once, a full-access
+lease covers it, and a scheduled job never gets it. Window rules still apply, so
+a password manager or a terminal stays refused whatever the name.
+
 ## The policy
 
 Five dimensions, evaluated independently, **most restrictive wins**:

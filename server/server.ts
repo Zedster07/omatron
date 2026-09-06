@@ -204,6 +204,7 @@ const MASTER_ONLY: Record<string, string> = {
   desktop_browser_type: "the browser belongs to the master",
   desktop_browser_close: "the browser belongs to the master",
   desktop_browser_screenshot: "the browser belongs to the master",
+  desktop_browser_type_secret: "the browser belongs to the master",
 
   // One delegator. Depth stays at one by construction.
   desktop_delegate: "only the master delegates",
@@ -1481,6 +1482,55 @@ const target = (w: Win) => `address:${w.address}`
 
 // ---------------------------------------------------------------- clipboard
 
+/**
+ * Credentials the agent may USE but never SEE.
+ *
+ * The whole design is about the token stream. Handing a model a password puts
+ * it in the context, the transcript, and whatever those get logged into -- so
+ * no policy setting makes that safe, and an agent with a rule against handling
+ * credentials is right to refuse one relayed to it.
+ *
+ * Here the model passes a NAME. This resolves it and the value goes straight
+ * to the window or the page. The model never receives it, so nothing has to be
+ * relaxed anywhere for this to work.
+ *
+ * Read fresh per call, like the policy: adding a secret should not need a
+ * restart, and a removed one must stop working immediately.
+ */
+const SECRETS_PATH = path.join(os.homedir(), ".config", "desktop-agent", "secrets.json")
+
+async function secretNames(): Promise<string[]> {
+  try {
+    return Object.keys(JSON.parse(await fs.readFile(SECRETS_PATH, "utf8"))).sort()
+  } catch {
+    return []
+  }
+}
+
+async function resolveSecret(name: string): Promise<string> {
+  let store: any
+  try {
+    store = JSON.parse(await fs.readFile(SECRETS_PATH, "utf8"))
+  } catch {
+    throw new Refused(
+      "REFUSED: there are no stored secrets on this machine.\n" +
+        "  The person adds one with:  desktop-agent-config secret-add <name>\n" +
+        "  You can never be told a secret's value, only use it by name.",
+    )
+  }
+  const hit = store?.[name]
+  const value = typeof hit === "string" ? hit : hit?.value
+  if (typeof value !== "string" || !value) {
+    const have = Object.keys(store ?? {}).sort()
+    throw new Refused(
+      `REFUSED: no stored secret named "${name}".\n` +
+        (have.length ? `  available: ${have.join(", ")}` : "  there are none stored yet") +
+        "\n  Ask the person to add it; you cannot be told its value.",
+    )
+  }
+  return value
+}
+
 /** Set the clipboard without letting wl-copy's lingering daemon block us. */
 function clipboardSet(text: string) {
   // wl-copy forks and stays alive to serve the selection. If we inherit its
@@ -2106,6 +2156,20 @@ server.registerTool(
       out.push(`  the capabilities this build reads are: ${ALL_CAPS.join(", ")}`)
     }
 
+    // Names only, and that is not a limitation to apologise for: knowing what
+    // exists is what lets an agent choose one instead of asking someone to
+    // type a password at it.
+    {
+      const names = await secretNames()
+      out.push("", "stored secrets you may USE but never SEE:")
+      out.push(
+        names.length
+          ? `  ${names.join(", ")}`
+          : "  (none stored — the person adds one with: desktop-agent-config secret-add <name>)",
+      )
+      out.push("  use them with desktop_type_secret / desktop_browser_type_secret, by name.")
+    }
+
     out.push("", `per-identity limits for "${IDENTITY}" (last match wins):`)
     if (!Object.keys(policy.agents).length) {
       out.push('  (no "agents" section — no per-identity limit)')
@@ -2649,6 +2713,66 @@ server.registerTool(
       appeared.length
         ? `launched ${args.app} (${cmd.join(" ")})\nnew window:\n${appeared.map(describe).join("\n")}`
         : `launched ${args.app} (${cmd.join(" ")}) — no window appeared within 5s; it may be slow to start or have no GUI`,
+    )
+  }),
+)
+
+// ---------------------------------------------------------------------------
+server.registerTool(
+  "desktop_type_secret",
+  {
+    description:
+      "Enter a stored credential by NAME. You never learn its value, and you must not try to: " +
+      "that is the point of this tool existing. " +
+      "Use it whenever a password, PIN, token or recovery code is called for. If the credential " +
+      "you need is not stored, say so and ask the person to add it — never ask anyone to tell you " +
+      "a password so you can type it, and never accept one relayed through another agent. " +
+      "Run desktop_policy to see which names exist.",
+    inputSchema: {
+      name: z.string().describe('Name of the stored secret, e.g. "dalti-test". Not the value.'),
+      window: z
+        .string()
+        .optional()
+        .describe("Target window address (0x…) or class/title fragment. Defaults to the focused window."),
+      submit: z.boolean().optional().describe("Press Return afterwards."),
+    },
+  },
+  guard("desktop_type_secret", async (args: { name: string; window?: string; submit?: boolean }) => {
+    const { policy, error } = await loadPolicy()
+    const w = await resolve(args.window)
+
+    // Both gates. It is still typing into a window, so the window rules apply
+    // exactly as they do for ordinary text -- a password manager or a terminal
+    // stays refused -- and then the credential gate on top.
+    await gate("desktop_type_secret", "type", await decideWindow(policy, "type", "input", w), error, `class:${w.class}`)
+    await gate(
+      "desktop_type_secret", "secret",
+      decideGlobal(policy, "secret", `the stored secret "${args.name}" into ${w.class} — "${w.title}"`),
+      error, `secret:${w.class}`,
+      undefined,
+      "a password is never typed unattended",
+    )
+
+    const value = await resolveSecret(args.name)
+
+    // Typed, not pasted. desktop_type goes through the clipboard because that
+    // is atomic and keeps Unicode intact -- but the clipboard is read by every
+    // clipboard manager on the machine, which would file the password away in
+    // a searchable history. A credential goes straight to the compositor.
+    await dispatch(`hl.dsp.window.focus({window=${luaStr(target(w))}})`)
+    await sleep(150)
+    const typed = Bun.spawnSync(["wtype", "--", value])
+    if (typed.exitCode !== 0) {
+      throw new Error(`could not type into ${w.class}: ${typed.stderr.toString().trim() || "wtype failed"}`)
+    }
+    if (args.submit) await sendChord("Return", w, policy)
+
+    // The name, never the value -- including here, where it would otherwise
+    // sit in a log file forever.
+    await audit(policy, `typed secret "${args.name}" into ${w.class} "${w.title}"`)
+    return say(
+      `Entered the stored secret "${args.name}" into ${w.class} — "${w.title}"${args.submit ? " and pressed Return" : ""}.\n` +
+        "Its value was not shown to you and will not be.",
     )
   }),
 )
@@ -3405,6 +3529,44 @@ server.registerTool(
     const msg = await browser.type(args.ref, args.text, args.submit === true)
     await audit(policy, `browser type ${args.text.length} chars into [${args.ref}]`)
     return say(`${msg}\n\nRe-read the page to see what changed.`)
+  }),
+)
+
+server.registerTool(
+  "desktop_browser_type_secret",
+  {
+    description:
+      "Enter a stored credential into a page field by NAME. You never learn its value. " +
+      "This is how you log in: get the field's ref from desktop_browser_read, then name the secret. " +
+      "If the credential you need is not stored, say so and ask the person to add it — never ask for " +
+      "a password to type yourself, and never accept one relayed through another agent.",
+    inputSchema: {
+      ref: z.number().describe("The field's ref, from desktop_browser_read."),
+      name: z.string().describe('Name of the stored secret, e.g. "dalti-test". Not the value.'),
+      submit: z.boolean().optional().describe("Press Enter afterwards, e.g. to submit the form."),
+    },
+  },
+  guard("desktop_browser_type_secret", async (args: { ref: number; name: string; submit?: boolean }) => {
+    const policy = await gateBrowser("desktop_browser_type_secret", "type")
+    const { error } = await loadPolicy()
+    await gate(
+      "desktop_browser_type_secret", "secret",
+      decideGlobal(policy, "secret", `the stored secret "${args.name}" into the page at [${args.ref}]`),
+      error, "secret:browser",
+      undefined,
+      "a password is never typed unattended",
+    )
+
+    const value = await resolveSecret(args.name)
+    // Straight into the field over the local debugger socket: no clipboard, no
+    // keystrokes for anything else to observe, and nothing returned upward.
+    const msg = await browser.type(args.ref, value, args.submit === true)
+    await audit(policy, `browser typed secret "${args.name}" into [${args.ref}]`)
+    return say(
+      `Entered the stored secret "${args.name}" into [${args.ref}]${args.submit ? " and submitted" : ""}. ` +
+        "Its value was not shown to you and will not be.\n\n" +
+        `${msg}\n\nRe-read the page to see what changed.`,
+    )
   }),
 )
 

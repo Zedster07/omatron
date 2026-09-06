@@ -630,6 +630,77 @@ def main(argv):
         print("ok")
         return 0
 
+    # ---- named credentials the agent can USE but never SEE
+    #
+    # The point of the store is the token stream. An agent that is handed a
+    # password has the password in its context, its transcript and whatever
+    # that gets logged into -- so no amount of policy makes typing one safe,
+    # and a model with a rule against handling credentials is right to refuse.
+    #
+    # Here the model passes a NAME. The server looks the value up and delivers
+    # it. Nothing about the secret ever reaches the model, which is why this
+    # needs no rule relaxed anywhere.
+    if cmd in ("secret-add", "secret-list", "secret-rm"):
+        # Local, because a later branch in this function does `import re`,
+        # which makes the name function-local everywhere including here.
+        import re
+        store = os.path.join(os.path.dirname(CFG), "secrets.json")
+
+        def load():
+            try:
+                with open(store) as f:
+                    return json.load(f)
+            except Exception:
+                return {}
+
+        def save(d):
+            os.makedirs(os.path.dirname(store), exist_ok=True)
+            fd = os.open(store + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
+                json.dump(d, f, indent=2)
+            os.replace(store + ".tmp", store)
+            os.chmod(store, 0o600)
+
+        d = load()
+
+        if cmd == "secret-list":
+            # Names and notes only. A tool that prints the values it is meant
+            # to protect ends up in a screenshot eventually.
+            for name in sorted(d):
+                note = d[name].get("note", "")
+                print(f"{name}\t{note}" if note else name)
+            return 0
+
+        if cmd == "secret-rm":
+            name = argv[2] if len(argv) > 2 else ""
+            if name not in d:
+                print(f"no secret named {name!r}")
+                return 1
+            del d[name]
+            save(d)
+            print(f"removed {name}")
+            return 0
+
+        name = argv[2] if len(argv) > 2 else ""
+        if not re.fullmatch(r"[a-zA-Z0-9._-]{1,64}", name or ""):
+            print("usage: desktop-agent-config secret-add <name> [note]   # value on stdin")
+            return 1
+        # Value on stdin only, never argv: a command line is visible in ps and
+        # lands in your shell history.
+        if sys.stdin.isatty():
+            import getpass
+            value = getpass.getpass(f"value for {name}: ")
+        else:
+            value = sys.stdin.read()
+        value = value.rstrip("\n")
+        if not value:
+            print("no value given")
+            return 1
+        d[name] = {"value": value, "note": " ".join(argv[3:])}
+        save(d)
+        print(f"stored {name}")   # never the value
+        return 0
+
     if cmd == "set-secret":
         key = argv[2] if len(argv) > 2 else sys.stdin.read().strip()
         if not key:
