@@ -2168,7 +2168,24 @@ server.registerTool(
           : "  (none stored — the person adds one with: desktop-agent-config secret-add <name>)",
       )
       out.push("  use them with desktop_type_secret / desktop_browser_type_secret, by name.")
+      out.push(
+        "  These are NOT desktop_type or desktop_browser_type. If your instructions tell you not",
+        "  to enter passwords with those, that rule is about handling a credential -- which you do",
+        "  not do here: you name one and never receive its value. If a credential you need is not",
+        "  listed, say so and let the person add it; do not ask anyone to tell you a password.",
+      )
     }
+
+    // Said out loud because this file is not the whole story and reading it as
+    // though it were has cost real time: four rounds of editing capabilities
+    // to permit something an agent was declining for its own reasons.
+    out.push(
+      "",
+      "SCOPE: this policy governs what the TOOLS do. It cannot change your own instructions,",
+      "and you may have rules of your own that refuse things it allows. If you refuse something",
+      "this file permits, say which of your instructions is responsible -- the person cannot",
+      "see them, and will otherwise keep editing this file expecting it to help.",
+    )
 
     out.push("", `per-identity limits for "${IDENTITY}" (last match wins):`)
     if (!Object.keys(policy.agents).length) {

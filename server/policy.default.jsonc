@@ -23,6 +23,26 @@
 //  Anything not matched by any pattern is DENIED. That is deliberate.
 //  Every refusal prints the exact rule that caused it, so run
 //  `desktop_policy` if you are unsure why something was blocked.
+//
+//  WHAT THIS FILE CANNOT DO
+//  It governs what the TOOLS do. It has no channel into the agent's own
+//  instructions, and an agent can refuse something this file allows.
+//
+//  That distinction has cost real time, so it is worth stating plainly:
+//  someone spent four rounds editing capabilities here trying to let an agent
+//  log into a dev app, while the actual rule sat in an agent definition
+//  (~/.claude/agents/*.md for Claude Code, and the equivalent for other
+//  runners). This file looked like the permission system because it is the one
+//  with capability names in it.
+//
+//  So if an agent refuses and no rule below explains it, the refusal is coming
+//  from its instructions, not from here. `desktop_policy` prints what this
+//  file decided; anything it does not account for is somewhere else.
+//
+//  For credentials specifically there is now a path that needs no rule
+//  relaxed anywhere: store one with `desktop-agent-config secret-add <name>`
+//  and the agent enters it by NAME, never learning the value. See "secret"
+//  under capabilities.
 // ============================================================================
 {
   // Master switch. false => every desktop_* tool refuses immediately.

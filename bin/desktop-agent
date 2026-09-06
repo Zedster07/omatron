@@ -106,6 +106,23 @@ doctor() {
       true)  ok "desktop control on" ;;
       *)     warn "desktop control OFF in your policy — every gated action refuses  (Policy tab, or: desktop-agent-config policy-set-enabled true)" ;;
     esac
+    # The layer this file cannot see.
+    #
+    # An agent definition can refuse what the policy allows, and it is not part
+    # of this plugin -- so someone debugging a refusal reads policy.jsonc,
+    # finds nothing wrong, and edits it anyway. Naming the file here is the
+    # cheapest way to point at the other half.
+    for a in "$HOME/.claude/agents"/*.md; do
+      [[ -e "$a" ]] || continue
+      if grep -qi 'do not enter passwords\|desktop_type' "$a" 2>/dev/null; then
+        if grep -q 'desktop_type_secret' "$a" 2>/dev/null; then
+          ok "agent rules in $(basename "$a") know about desktop_type_secret"
+        else
+          warn "$a has its own rules about typing, and predates desktop_type_secret — an agent reading it may refuse credentials the policy allows"
+        fi
+      fi
+    done
+
     case "$(desktop-agent-config policy-yolo 2>/dev/null)" in
       true)  warn "full access permitted — a lease auto-approves every ask while it runs" ;;
       *)     ok "full access not permitted — a lease would change nothing" ;;
