@@ -518,13 +518,34 @@ if target in ("all", "codex"):
             if os.path.exists(cfg):
                 content = open(cfg).read()
                 shutil.copy(cfg, f"{cfg}.bak.{int(time.time())}")
-            snippet = f'\n[mcp_servers.desktop]\ncommand = "{bun}"\nargs = ["run", "{server_ts}"]\nenv = {{ DESKTOP_AGENT_IDENTITY = "codex" }}\n'
-            if "[mcp_servers.desktop]" in content:
-                print("  ✓ Codex CLI (~/.codex/config.toml): desktop server entry already present")
-            else:
+            snippet = f'[mcp_servers.desktop]\ncommand = "{bun}"\nargs = ["run", "{server_ts}"]\nenv = {{ DESKTOP_AGENT_IDENTITY = "codex" }}\n'
+            # Rewrite the block rather than skipping it when one exists.
+            #
+            # This used to print "already present" and change nothing, which
+            # made every re-install a no-op that reported success. So when the
+            # server moved -- renamed from omarchy-desktop-agent, and out of
+            # the dev clone into the plugin directory -- codex kept pointing at
+            # a path that no longer existed, and said it was fine each time.
+            # The other three runners are JSON and get overwritten wholesale,
+            # so they healed on the next install and codex alone did not.
+            lines = content.split("\n")
+            start = next((i for i, l in enumerate(lines)
+                          if l.strip() == "[mcp_servers.desktop]"), None)
+            if start is None:
                 with open(cfg, "a") as f:
-                    f.write(snippet)
+                    f.write(("" if content.endswith("\n") or not content else "\n") + "\n" + snippet)
                 print("  ✓ Codex CLI (~/.codex/config.toml): registered")
+            else:
+                # A TOML table runs to the next table header or end of file.
+                end = next((i for i in range(start + 1, len(lines))
+                            if lines[i].lstrip().startswith("[")), len(lines))
+                was = "\n".join(lines[start:end])
+                lines[start:end] = snippet.rstrip("\n").split("\n") + [""]
+                open(cfg, "w").write("\n".join(lines))
+                if server_ts in was:
+                    print("  ✓ Codex CLI (~/.codex/config.toml): already current")
+                else:
+                    print("  ✓ Codex CLI (~/.codex/config.toml): updated (it pointed somewhere else)")
             installed_any = True
         except Exception as e:
             print(f"  ✗ Codex CLI: failed to update ({e})")
