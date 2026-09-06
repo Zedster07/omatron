@@ -300,6 +300,30 @@ def main(argv):
     def _is_code(line):
         return not line.lstrip().startswith("//")
 
+    # Every capability the SERVER knows about, not just the ones this policy
+    # happens to mention.
+    #
+    # A missing capability is not absent, it is "ask" -- the server coerces it
+    # that way. But the panel could only show and change keys that were already
+    # in the file, so a capability added in a later version was invisible and
+    # unsettable for everyone who installed before it: no button lit, and
+    # clicking one answered "no such capability". That is every existing user,
+    # every time the list grows.
+    #
+    # Read from the shipped default next to this script so there is one list,
+    # and it grows on its own.
+    def _known_caps():
+        here = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+        try:
+            raw = open(os.path.join(here, "server", "policy.default.jsonc")).read()
+        except OSError:
+            return []
+        body = re.search(r'"capabilities"\s*:\s*\{(.*?)\n  \}', raw, re.S)
+        if not body:
+            return []
+        return [m.group(1) for m in re.finditer(r'^\s*"([a-zA-Z]+)"\s*:\s*"(?:allow|ask|deny)"',
+                                                body.group(1), re.M)]
+
     # Read-modify-write the policy under a lock, into a private temp file.
     #
     # Every setter used to write to a fixed "<path>.tmp". Two writers at once
@@ -488,7 +512,14 @@ def main(argv):
                 rows[m.group(1)] = (m.group(2), i)
 
         if cmd == "policy-caps":
-            print(_json.dumps({k: v[0] for k, v in rows.items()}))
+            # Ordered by the shipped list, with anything this policy does not
+            # mention reported at its effective value rather than omitted.
+            out = {}
+            for name in _known_caps():
+                out[name] = rows[name][0] if name in rows else "ask"
+            for name, (val, _) in rows.items():
+                out.setdefault(name, val)
+            print(_json.dumps(out))
             return 0
 
         name = argv[2] if len(argv) > 2 else ""
@@ -496,7 +527,7 @@ def main(argv):
         if want not in ("allow", "ask", "deny"):
             print("usage: desktop-agent-config policy-set-cap <name> allow|ask|deny")
             return 1
-        if name not in rows:
+        if name not in rows and name not in _known_caps():
             print(f"no such capability: {name}")
             return 1
 
@@ -515,7 +546,20 @@ def main(argv):
                 if _is_code(lines[i]) and re.search(pat, lines[i]):
                     lines[i] = re.sub(pat, r'\g<1>' + want + r'\g<3>', lines[i])
                     return None
-            return f"no such capability: {name}"
+
+            # Not in the file: add it. The last entry needs a comma it did not
+            # have when it was last, and the indent is copied from a sibling so
+            # the block still reads as one written by hand.
+            last = next((i for i in range(end - 1, start, -1)
+                         if _is_code(lines[i])
+                         and re.search(r'"[a-zA-Z]+"\s*:\s*"(allow|ask|deny)"', lines[i])), None)
+            if last is None:
+                return f"no such capability: {name}"
+            indent = lines[last][:len(lines[last]) - len(lines[last].lstrip())]
+            if not lines[last].rstrip().endswith(","):
+                lines[last] = lines[last].rstrip() + ","
+            lines.insert(last + 1, f'{indent}"{name}": "{want}"')
+            return None
 
         err = _edit_policy(path, _mutate)
         if err:
