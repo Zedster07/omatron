@@ -480,6 +480,40 @@ export async function type(ref: number, text: string, submit = false): Promise<s
   })
 }
 
+/**
+ * A picture of the PAGE, rendered by the browser itself.
+ *
+ * Not a photograph of the screen, and that distinction is the whole reason
+ * this exists. desktop_screenshot asks the compositor for a rectangle of a
+ * monitor, so it returns whatever is physically at those coordinates -- which
+ * once meant handing back somebody's YouTube tab under the label of an
+ * off-screen agent window. Here the renderer draws the page and hands over the
+ * result: no other window can appear in it, occlusion is meaningless, and it
+ * works with the browser on another workspace or behind everything else.
+ *
+ * So anything on the web should come through this, and desktop_screenshot is
+ * for the rest of the desktop.
+ */
+export async function shot(fullPage = false): Promise<{ data: string; w: number; h: number }> {
+  return withCdp(async (send) => {
+    const { contentSize } = await send("Page.getLayoutMetrics")
+    // Chromium refuses a capture taller than 16384px, and a long page hits
+    // that far more easily than it looks -- an infinite-scroll feed always
+    // will. Clamped rather than refused: a tall screenshot that stops early is
+    // more use than an error.
+    const clip = fullPage && contentSize
+      ? { x: 0, y: 0, width: contentSize.width, height: Math.min(contentSize.height, 16384), scale: 1 }
+      : undefined
+    const { data } = await send("Page.captureScreenshot", {
+      format: "png",
+      captureBeyondViewport: fullPage,
+      ...(clip ? { clip } : {}),
+    })
+    const metrics = clip ?? (await send("Page.getLayoutMetrics")).cssVisualViewport ?? {}
+    return { data, w: Math.round(metrics.width ?? 0), h: Math.round(metrics.height ?? 0) }
+  })
+}
+
 export async function currentPage(): Promise<{ url: string; title: string }> {
   const t = await pageTarget()
   return { url: t.url, title: t.title }

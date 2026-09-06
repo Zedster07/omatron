@@ -203,6 +203,7 @@ const MASTER_ONLY: Record<string, string> = {
   desktop_browser_click: "the browser belongs to the master",
   desktop_browser_type: "the browser belongs to the master",
   desktop_browser_close: "the browser belongs to the master",
+  desktop_browser_screenshot: "the browser belongs to the master",
 
   // One delegator. Depth stays at one by construction.
   desktop_delegate: "only the master delegates",
@@ -3372,6 +3373,55 @@ server.registerTool(
     const msg = await browser.type(args.ref, args.text, args.submit === true)
     await audit(policy, `browser type ${args.text.length} chars into [${args.ref}]`)
     return say(`${msg}\n\nRe-read the page to see what changed.`)
+  }),
+)
+
+server.registerTool(
+  "desktop_browser_screenshot",
+  {
+    description:
+      "See the page as an image, rendered by the browser itself. " +
+      "Use this for anything on the web instead of desktop_screenshot: it draws the page rather than " +
+      "photographing the monitor, so no other window can appear in it and it works with the browser " +
+      "on another workspace or behind everything else. " +
+      "desktop_browser_read is still the better tool for CONTENT — text, links, form fields, and the " +
+      "refs you click and type into. Reach for this one when the question is visual: layout, spacing, " +
+      "colour, whether something actually looks right.",
+    inputSchema: {
+      full_page: z
+        .boolean()
+        .optional()
+        .describe("Capture the whole scrollable page rather than just the visible part. Very long pages are clipped."),
+      save: z
+        .boolean()
+        .optional()
+        .describe("Also keep it as a PNG the person can open afterwards, and report the path."),
+    },
+  },
+  guard("desktop_browser_screenshot", async (args: { full_page?: boolean; save?: boolean }) => {
+    const policy = await gateBrowser("desktop_browser_screenshot", "screenshot")
+    const page = await browser.currentPage()
+    const { data, w, h } = await browser.shot(args.full_page === true)
+
+    const notes = [`rendered ${page.url}`, `"${page.title}"`, `${w}x${h} css px`]
+
+    if (args.save) {
+      await fs.mkdir(SHOTS, { recursive: true, mode: 0o700 })
+      await fs.chmod(SHOTS, 0o700).catch(() => {})
+      const file = path.join(SHOTS, `page-${Date.now()}-${process.pid}.png`)
+      await fs.writeFile(file, Buffer.from(data, "base64"))
+      await fs.chmod(file, 0o600).catch(() => {})
+      await pruneShots()
+      notes.splice(1, 0, `saved to ${file}`)
+    }
+
+    // No redaction note and no coordinate mapping, because neither applies:
+    // nothing but this page is in the image, and you act on it through refs
+    // from desktop_browser_read rather than by pointing at pixels.
+    notes.push("", "This is the page only — no other window can be in it. Use desktop_browser_read for the refs to click.")
+
+    await audit(policy, `browser screenshot ${page.url}${args.save ? " (saved)" : ""}`)
+    return say(notes.join("\n"), [{ type: "image", data, mimeType: "image/png" }])
   }),
 )
 
