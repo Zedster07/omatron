@@ -200,7 +200,7 @@ Add to ~/.config/hypr/bindings.lua:
     o.bind("F9",  "Dictate (stop)",      "desktop-agent-listen stop",    { release = true })
     o.bind("F10", "Voice command",       "desktop-agent-listen start command")
     o.bind("F10", "Voice command (stop)","desktop-agent-listen stop",    { release = true })
-    o.bind("SUPER + F2", "Cancel voice", "desktop-agent-listen cancel")
+    o.bind("SUPER + F2", "Stop agent / cancel voice", "desktop-agent-listen cancel")
 
     -- Type a request instead of speaking it. Same pipeline behind it.
     --
@@ -367,6 +367,21 @@ case "${1:-doctor}" in
   job-cancel)
     [[ -n "${2:-}" ]] || { bad "usage: desktop-agent job-cancel <id|all>"; exit 1; }
     bun run "$PLUGIN_DIR/voice/jobs-cli.ts" cancel "$2"
+    ;;
+
+  stop)
+    # Stop a running agent from a terminal.
+    #
+    # The daemon's "cancel" abandons a recording, closes the prompt and kills
+    # the agent's whole process tree. All three routes -- this, Super+F2, and
+    # the stop button on the corner readout -- end at the same place; what was
+    # missing was a name you could guess.
+    if desktop-agent-listen cancel 2>/dev/null; then
+      ok "stop sent"
+    else
+      bad "could not reach the voice daemon  (systemctl --user status desktop-agent-voice)"
+      exit 1
+    fi
     ;;
 
   agent-check)
@@ -609,5 +624,30 @@ for m, k in [("", "F9"), ("", "F10"), ("SUPER", "F1"), ("SUPER", "F2")]:
         print(f"  ours       {label}")
 PY
     ;;
-  *) echo "usage: desktop-agent [doctor|setup|mcp-install|keybinds]"; exit 2 ;;
+  *)
+    # Listed in full because the one command people go looking for under
+    # pressure is "stop", and it was not discoverable anywhere: not here, not
+    # in the panel, and bound to a key labelled after a different feature.
+    cat <<'USAGE'
+usage: desktop-agent <command>
+
+  stop                    stop a running agent (also: Super+F2, or the
+                          stop button on the corner readout)
+  doctor                  health check
+  setup                   install everything and register the keybinds
+  uninstall               remove keybinds, schedules, units and state
+
+  jobs                    list scheduled reminders and tasks
+  job-cancel <id|all>     cancel one, or all of them
+  remind "<when>" "<what>"  schedule a notification
+
+  link                    symlink the commands into ~/.local/bin
+  mcp-install             register the MCP server with the agent CLIs
+  agent-check             prove the tier-4 hand-off is actually confined
+  keybinds                print the keybindings this plugin installs
+
+Settings, the policy switches and the capability table live in the panel:
+click the bar icon, then Policy.
+USAGE
+    exit 2 ;;
 esac

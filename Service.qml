@@ -326,6 +326,19 @@ Item {
     root.log("voice control ignored (voxtype owns capture): " + verb)
   }
 
+  // Stop whatever is running: the recording, the prompt, and the agent.
+  //
+  // The daemon's "cancel" already does all three and kills the agent's whole
+  // process tree, so this is only about reaching it. Until now the sole way in
+  // was Super+F2, bound under the name "Cancel voice" -- so the one gesture
+  // that stops a background agent was named after a different feature and had
+  // no button anywhere. Someone watching the agent work had to already know.
+  function stopRun() {
+    voiceCtlProc.command = ["desktop-agent-listen", "cancel"]
+    voiceCtlProc.running = true
+    root.log("stop requested from the HUD")
+  }
+
   // --------------------------------------------------------------- recap
 
   function showRecap(payload) {
@@ -537,6 +550,7 @@ Item {
     elapsed: root.voiceElapsed
     onCommit: root.voiceSend("commit")
     onDiscard: root.voiceSend("discard")
+    onStopRequested: root.stopRun()
   }
 
   CommandBar {

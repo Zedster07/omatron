@@ -19,6 +19,11 @@ import "."
 Item {
   id: root
 
+  // Emitted when the person asks the running agent to stop, from the corner
+  // readout. The readout is the only thing on screen saying the agent is
+  // busy, so it is where "make it stop" belongs.
+  signal stopRequested()
+
   property string phase: "idle"
   property string mode: "dictate"
   property string transcript: ""
@@ -121,8 +126,14 @@ Item {
     // An empty input region while compact. Without this the surface still
     // covers the screen and silently swallows every click, which is the same
     // complaint as the scrim even once the scrim is invisible.
-    mask: root.immersive ? null : passThrough
+    //
+    // The exception is a working agent: then the pill itself takes clicks, so
+    // the stop control can be reached. Only the pill's own rectangle, and only
+    // while working -- the rest of the screen stays yours, which was the whole
+    // point of making this surface click-through in the first place.
+    mask: root.immersive ? null : (root.working ? pillRegion : passThrough)
     Region { id: passThrough }
+    Region { id: pillRegion; item: pill }
 
 
     // Dim behind the core while listening only. The compositor blurs what this
@@ -328,6 +339,56 @@ Item {
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
             elide: Text.ElideRight
+          }
+        }
+
+        // ---- stop
+        //
+        // Always visible while the agent works, never only on hover: you
+        // cannot discover a hover state on something you did not know was
+        // clickable, and the person looking for this has already decided they
+        // want it to stop.
+        //
+        // Its own button rather than the whole pill, because the pill is also
+        // the thing you read -- and a readout that aborts the run when you
+        // click to read it is worse than no button at all.
+        Rectangle {
+          visible: root.working
+          anchors.verticalCenter: parent.verticalCenter
+          width: stopRow.implicitWidth + Style.spacing.xl * 2
+          height: stopRow.implicitHeight + Style.spacing.md * 2
+          radius: Style.cornerRadius
+          color: stopHover.hovered ? Util.alpha(Theme.danger, 0.22) : Util.alpha(Theme.danger, 0.1)
+          border.width: Style.spacing.hairline
+          border.color: Util.alpha(Theme.danger, stopHover.hovered ? 0.85 : 0.45)
+          Behavior on color { ColorAnimation { duration: Theme.fast } }
+          Behavior on border.color { ColorAnimation { duration: Theme.fast } }
+
+          HoverHandler { id: stopHover; cursorShape: Qt.PointingHandCursor }
+          TapHandler { onTapped: root.stopRequested() }
+
+          Row {
+            id: stopRow
+            anchors.centerIn: parent
+            spacing: Style.spacing.sm
+
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: "\u{f04d}"
+              color: Theme.danger
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+            }
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: "stop"
+              color: Theme.danger
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              font.letterSpacing: 1.2
+              font.capitalization: Font.AllUppercase
+            }
           }
         }
       }
