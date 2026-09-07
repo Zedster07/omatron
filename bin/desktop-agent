@@ -63,7 +63,7 @@ doctor() {
     if desktop-agent-config all 2>/dev/null | grep -q '"hasRemoteKey": true'; then
       ok "remote transcription configured"
     else
-      bad "remote selected but no API key set"; missing=1
+      bad "remote selected but no API key set — the key must be for $(desktop-agent-config get voice.remoteProvider 2>/dev/null || echo groq), the service in the panel's Voice tab"; missing=1
     fi
   fi
 

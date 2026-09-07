@@ -186,6 +186,43 @@ Panel {
             }
         }
     }
+    // Endpoint and model move together, or not at all.
+    //
+    // They were two independent settings, one of them not in the panel at all,
+    // and the pairing is what makes either of them correct: whisper-large-v3-turbo
+    // is a Groq model and whisper-1 is OpenAI's, so a provider change that moved
+    // only the address would leave a model the new host has never heard of and an
+    // error that names neither.
+    //
+    // "custom" changes nothing but the label -- whatever is already there is
+    // presumably what the person set on purpose.
+    readonly property var sttProviders: ({
+            groq: {
+                endpoint: "https://api.groq.com/openai/v1/audio/transcriptions",
+                models: ["whisper-large-v3-turbo", "whisper-large-v3"]
+            },
+            openai: {
+                endpoint: "https://api.openai.com/v1/audio/transcriptions",
+                models: ["whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"]
+            }
+        })
+
+    function sttModelsFor(provider) {
+        var p = root.sttProviders[provider];
+        return p ? p.models : [root.s("voice.remoteModel", "whisper-large-v3-turbo")];
+    }
+
+    function setSttProvider(provider) {
+        root.setCfg("voice.remoteProvider", provider);
+        var p = root.sttProviders[provider];
+        if (!p)
+            return;      // custom: the person owns both fields
+        root.setCfg("voice.remoteEndpoint", p.endpoint);
+        // Only when the current model does not belong to the new service.
+        if (p.models.indexOf(root.s("voice.remoteModel", "")) < 0)
+            root.setCfg("voice.remoteModel", p.models[0]);
+    }
+
     function setCap(name, value) {
         root.queueWrite(["desktop-agent-config", "policy-set-cap", name, value]);
     }
@@ -1088,6 +1125,51 @@ Panel {
                             }
                         }
 
+                        // Which service the key belongs to.
+                        //
+                        // The request is the standard OpenAI /audio/transcriptions
+                        // shape, so anything speaking it works -- Groq, OpenAI, a
+                        // local whisper.cpp server, a gateway. But the endpoint
+                        // defaulted to Groq and lived only in the settings file, so
+                        // the panel asked for "an API key" without saying whose,
+                        // beside a model name that is Groq's. Someone pasting an
+                        // OpenAI key got a working key pointed at the wrong host
+                        // with a model that host has never heard of.
+                        //
+                        // Picking a provider sets the endpoint AND the model
+                        // together, because getting one right and the other wrong
+                        // is the failure this is here to prevent.
+                        SettingRow {
+                            width: parent.width
+                            visible: root.s("voice.sttMode", "remote") === "remote"
+                            label: "transcription service"
+                            fontFamily: root.fontFamily
+                            help: "Any service speaking OpenAI's /audio/transcriptions API. Choosing one sets its address and a model it actually has."
+                            Dropdown {
+                                width: parent.width
+                                showLabel: false
+                                options: ["groq", "openai", "custom"]
+                                value: root.s("voice.remoteProvider", "groq")
+                                onChanged: function (v) {
+                                    root.setSttProvider(v);
+                                }
+                            }
+                        }
+
+                        SettingRow {
+                            width: parent.width
+                            visible: root.s("voice.sttMode", "remote") === "remote" && root.s("voice.remoteProvider", "groq") === "custom"
+                            label: "endpoint"
+                            fontFamily: root.fontFamily
+                            help: "The full URL of the transcriptions endpoint, e.g. http://localhost:8080/v1/audio/transcriptions for a local whisper.cpp server."
+                            TextField {
+                                width: parent.width
+                                text: root.s("voice.remoteEndpoint", "")
+                                fontFamily: root.fontFamily
+                                onEditingFinished: root.setCfg("voice.remoteEndpoint", text.trim())
+                            }
+                        }
+
                         SettingRow {
                             width: parent.width
                             visible: root.s("voice.sttMode", "remote") === "remote"
@@ -1097,7 +1179,7 @@ Panel {
                             Dropdown {
                                 width: parent.width
                                 showLabel: false
-                                options: ["whisper-large-v3-turbo", "whisper-large-v3"]
+                                options: root.sttModelsFor(root.s("voice.remoteProvider", "groq"))
                                 value: root.s("voice.remoteModel", "whisper-large-v3-turbo")
                                 onChanged: function (v) {
                                     root.setCfg("voice.remoteModel", v);
@@ -1108,9 +1190,13 @@ Panel {
                         SettingRow {
                             width: parent.width
                             visible: root.s("voice.sttMode", "remote") === "remote"
-                            label: root.s("voice.hasRemoteKey", false) ? "api key — set" : "api key — not set"
+                            label: (root.s("voice.remoteProvider", "groq") === "custom" ? "api key" : root.s("voice.remoteProvider", "groq") + " api key") + (root.s("voice.hasRemoteKey", false) ? " — set" : " — not set")
                             fontFamily: root.fontFamily
-                            help: "Stored at ~/.config/desktop-agent/stt.key, mode 0600 from the moment it is created, and never shown again. Free key at console.groq.com."
+                            help: {
+                                var p = root.s("voice.remoteProvider", "groq");
+                                var where = p === "groq" ? "Free key at console.groq.com." : p === "openai" ? "From platform.openai.com/api-keys." : "Whatever the endpoint above expects; leave blank if it needs none.";
+                                return "A key for the service selected above — they are not interchangeable. " + where + " Stored at ~/.config/desktop-agent/stt.key, mode 0600 from the moment it is created, and never shown again.";
+                            }
                             Row {
                                 width: parent.width
                                 spacing: Style.spacing.controlGap

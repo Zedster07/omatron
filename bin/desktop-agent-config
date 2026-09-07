@@ -37,6 +37,12 @@ DEFAULTS = {
         "sttMode": "remote",                # remote | local. Remote is the
                                             # default: it needs no download.
         "localModel": "small.en",
+        # Which service the key belongs to. The request is the standard OpenAI
+        # /audio/transcriptions shape, so anything speaking it works -- Groq,
+        # OpenAI, a local whisper.cpp server. Recorded explicitly because the
+        # panel used to ask for "an API key" without saying whose, beside a
+        # model name that is Groq's.
+        "remoteProvider": "groq",
         "remoteEndpoint": "https://api.groq.com/openai/v1/audio/transcriptions",
         "remoteModel": "whisper-large-v3-turbo",
         "biasPrompt": True,
@@ -175,7 +181,7 @@ def apply_stt():
         if not has_secret():
             print("remote selected but no API key is set", file=sys.stderr)
             return 1
-        print(f"stt -> remote ({v['remoteModel']})")
+        print(f"stt -> remote: {v.get('remoteProvider', 'groq')} / {v['remoteModel']}")
         return 0
 
     # Local: the model is a unit Environment=, so changing it means rewriting
