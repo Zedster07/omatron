@@ -184,10 +184,12 @@ If you cannot do it safely, reply {"steps": null, "reason": "<why>"}.`
 // The registry is still preferred where it fits: a registered command is one
 // somebody wrote down on purpose, and its argv has been seen before.
 export interface Resolution {
-  kind: "intent" | "steps" | "agent"
+  kind: "intent" | "steps" | "agent" | "say"
   id?: string
   slots?: Record<string, string>
   steps?: string[][]
+  /** For kind "say": what to tell the person. Nothing is executed. */
+  text?: string
   explanation: string
   severity: "normal" | "destructive"
   provider: string
@@ -256,8 +258,19 @@ ${allowAgent ? `- "reply to the message that just came in" -> {"kind":"agent","r
 - "close whichever window is covering the clock" -> {"kind":"agent","reason":"needs to see what is on screen"}
 - "play despacito on youtube" -> {"kind":"agent","reason":"a search URL only lists results; playing it means picking one and pressing play"}` : ""}
 
+NOT EVERY SENTENCE IS A TASK. "hello", "how are you", "what can you do",
+"thanks", "who made you", "what did you just do" -- these are talk, and the
+answer to talk is an answer, not a command. Reply with:
+    {"kind":"say","text":"<what you would say back, 1-3 sentences>"}
+Nothing is executed and nothing is approved: the person reads it and either
+follows up or dismisses it. Use it whenever running something would be a
+strange response to what was actually said. Do not use it to explain why you
+are refusing a real task -- that is what "none" is for.
+
 Reply with JSON only, no prose and no code fence:
 {"kind":"intent","id":"<id from the list>","slots":{}}
+or
+{"kind":"say","text":"<a direct answer, when the person was talking rather than asking for something to be done>"}
 or
 {"kind":"steps","steps":[["program","arg"]],"explanation":"<one short sentence the user reads before approving>","severity":"normal"}
 ${allowAgent ? `or
@@ -290,6 +303,19 @@ If you cannot do it safely, reply {"kind":"none","reason":"<why>"}.`
   // The agent tier is only reachable when the setting allows it. A model that
   // asks for it anyway is treated as having no answer, rather than being
   // quietly upgraded past the user's choice.
+  if (json.kind === "say") {
+    const text = String(json.text ?? json.reason ?? "").trim()
+    if (text) {
+      return {
+        result: {
+          kind: "say", text: text.slice(0, 1200),
+          explanation: "", severity: "normal", provider: provider.id,
+        },
+        provider: provider.id,
+      }
+    }
+  }
+
   if (json.kind === "agent") {
     if (!allowAgent) return { result: null, provider: provider.id }
     return {

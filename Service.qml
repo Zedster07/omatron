@@ -553,6 +553,7 @@ Item {
     }
 
     function recap(payload: string): void { root.showRecap(payload) }
+    function reply(payload: string): void { root.showReply(payload) }
   }
 
   // ------------------------------------------------------------------- UI
@@ -583,6 +584,13 @@ Item {
     result: root.promptResult
     onSubmitted: function(text) { root.submitPrompt(text) }
     onDismissed: { root.promptOpen = false; root.promptPhase = "idle" }
+  }
+
+  ReplyCard {
+      reply: root.reply
+      onDismissed: root.dismissReply()
+      onFollowUp: root.replyFollowUp()
+      onSave: root.saveReply()
   }
 
   RecapCard {

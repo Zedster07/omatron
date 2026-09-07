@@ -2,6 +2,7 @@ singleton Theme 1.0 Theme.qml
 ApprovalOverlay 1.0 ApprovalOverlay.qml
 VoiceHud 1.0 VoiceHud.qml
 RecapCard 1.0 RecapCard.qml
+ReplyCard 1.0 ReplyCard.qml
 StatusRow 1.0 StatusRow.qml
 HudFrame 1.0 HudFrame.qml
 HudRing 1.0 HudRing.qml

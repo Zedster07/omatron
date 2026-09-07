@@ -556,6 +556,28 @@ PYEOF
     bun run "$PLUGIN_DIR/voice/jobs-cli.ts" cancel "$2"
     ;;
 
+  save-answer)
+    # Keep an answer as a file, from the reply card's S key.
+    #
+    # Markdown because the content is prose and prose should be readable
+    # without a tool. Under Documents rather than the plugin's state
+    # directory: state is ours to delete on uninstall, and something the
+    # person deliberately kept is theirs.
+    #
+    # The path is printed so the caller can say where it went. A save that
+    # reports nothing is indistinguishable from one that failed.
+    dir="${XDG_DOCUMENTS_DIR:-$HOME/Documents}/omatron-answers"
+    mkdir -p "$dir" || { bad "could not create $dir"; exit 1; }
+    file="$dir/$(date +%Y-%m-%d-%H%M%S).md"
+    {
+      printf '# %s\n\n' "$(date '+%A %-d %B %Y, %H:%M')"
+      if [[ -n "${2:-}" ]]; then printf '> %s\n\n' "$2"; fi
+      printf '%s\n' "${3:-}"
+    } > "$file"
+    chmod 600 "$file"
+    echo "$file"
+    ;;
+
   stop)
     # Stop a running agent from a terminal.
     #
@@ -841,6 +863,9 @@ usage: desktop-agent <command>
 
   stop                    stop a running agent (also: Super+F2, or the
                           stop button on the corner readout)
+  save-answer "<said>" "<answer>"
+                          keep a spoken answer as markdown under
+                          ~/Documents/omatron-answers (the reply card's S key)
   doctor                  health check
   setup                   install everything and register the keybinds
   uninstall               remove keybinds, schedules, units and state

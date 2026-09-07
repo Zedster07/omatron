@@ -558,6 +558,21 @@ async function runCommand(phrase: string) {
           aiRouted = { provider: r.provider ?? "ai" }
         }
       }
+    } else if (r.result?.kind === "say") {
+      // Talk, answered. Nothing runs, nothing is approved: the card shows the
+      // answer and the person either follows up or dismisses it.
+      //
+      // This exists because "hello" used to come back as "nothing matched, so
+      // nothing ran" -- a reply that reads as the plugin being broken rather
+      // than as it having understood perfectly well and had nowhere to put an
+      // answer.
+      log(`say: ${r.result.text?.slice(0, 60)}`)
+      remember(phrase, r.result.text ?? "", "said")
+      Bun.spawn([...SHELL_IPC, "reply",
+                 JSON.stringify({ text: r.result.text ?? "", said: phrase })],
+                { stdout: "ignore", stderr: "ignore" })
+      await clearHud({ state: "idle" }, 0)
+      return
     } else if (r.result?.kind === "agent") {
       await runAgent(phrase, r.result.explanation)
       return
