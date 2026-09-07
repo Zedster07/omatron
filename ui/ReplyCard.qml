@@ -22,7 +22,9 @@ Item {
   id: root
 
   property var reply: null          // { text, said, at }
-  readonly property bool open: reply !== null
+  // !! rather than !== null: an unset binding arrives as undefined, and the
+  // card showed itself with nothing in it the first time round.
+  readonly property bool open: !!reply
 
   signal dismissed()
   signal followUp()

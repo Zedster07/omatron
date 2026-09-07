@@ -364,6 +364,67 @@ Item {
 
   // --------------------------------------------------------------- recap
 
+  // ------------------------------------------------------------- answers
+  //
+  // A spoken sentence that was talk rather than a task. Held here rather than
+  // in the card so the save path still has it after the card has gone.
+  property var reply: null
+
+  function showReply(payload) {
+    var d;
+    try {
+      d = JSON.parse(payload);
+    } catch (e) {
+      return;
+    }
+    if (!d || !d.text)
+      return;
+    root.reply = {
+      text: String(d.text),
+      said: String(d.said || ""),
+      at: Date.now()
+    };
+  }
+
+  function dismissReply() {
+    root.reply = null;
+  }
+
+  // Ask again without making the person find the key again.
+  //
+  // Close first, then start the listener. That order is not a nicety: this
+  // card holds an exclusive keyboard grab and the recorder wants the focus it
+  // is holding.
+  Process {
+    id: followUpProc
+    command: ["desktop-agent-listen", "start", "command"]
+  }
+  function replyFollowUp() {
+    root.reply = null;
+    followUpProc.running = true;
+  }
+
+  // Written where the person can find it. The path comes back on stdout and is
+  // shown, because a save that says nothing looks like one that failed.
+  Process {
+    id: saveReplyProc
+    stdout: SplitParser {
+      onRead: function (line) {
+        var t = String(line).trim();
+        if (t !== "")
+          root.notify("Desktop Agent", "Answer saved to " + t);
+      }
+    }
+  }
+  function saveReply() {
+    if (!root.reply)
+      return;
+    saveReplyProc.command = ["desktop-agent", "save-answer", root.reply.said || "", root.reply.text];
+    saveReplyProc.running = true;
+    root.reply = null;
+  }
+
+
   function showRecap(payload) {
     var data
     try { data = JSON.parse(payload) } catch (e) { return }
