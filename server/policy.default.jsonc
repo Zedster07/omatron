@@ -141,7 +141,13 @@
     // depends on the agent saying so.
     //
     // "allow" skips even the first card. Yours to set; nothing sets it for you.
-    "secret": "ask"
+    "secret": "ask",
+    // 3D modelling through desktop_blender_*. Structured operations only --
+    // the agent names one and gives numbers, it never sends Python -- so this
+    // grants building shapes in a file, not running code. Starts at "ask" like
+    // anything that writes; there is little reason to keep it there once you
+    // have watched it work.
+    "blender": "ask"
   },
 
   // --------------------------------------------------------------------------

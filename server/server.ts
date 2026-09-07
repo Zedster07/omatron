@@ -34,6 +34,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod"
 import * as browser from "./browser"
+import * as blender from "./blender"
 import { $ } from "bun"
 import { AsyncLocalStorage } from "node:async_hooks"
 import fs from "node:fs/promises"
@@ -232,6 +233,8 @@ const MASTER_ONLY: Record<string, string> = {
   desktop_browser_close: "the browser belongs to the master",
   desktop_browser_screenshot: "the browser belongs to the master",
   desktop_browser_type_secret: "the browser belongs to the master",
+  desktop_blender_scene: "one model file, one editor",
+  desktop_blender_model: "one model file, one editor",
 
   // One delegator. Depth stays at one by construction.
   desktop_delegate: "only the master delegates",
@@ -341,11 +344,13 @@ type Capability =
   | "write"
   | "browser"
   | "secret"
+  | "blender"
 
 const RANK: Record<Action, number> = { allow: 0, ask: 1, deny: 2 }
 const WINDOW_VERBS: WindowVerb[] = ["see", "focus", "manage", "input"]
 const ALL_CAPS: Capability[] = [
   "secret",
+  "blender",
   "observe",
   "screenshot",
   "workspace",
@@ -3816,6 +3821,117 @@ server.registerTool(
     const msg = await browser.type(args.ref, args.text, args.submit === true)
     await audit(policy, `browser type ${args.text.length} chars into [${args.ref}]`)
     return say(`${msg}\n\nRe-read the page to see what changed.`)
+  }),
+)
+
+// ===========================================================================
+//  3D modelling, through a fixed set of operations.
+//
+//  The agent names an operation and gives numbers; it never sends code. That
+//  is deliberate and load-bearing: `blender --python <a file it wrote>` is
+//  python3 under another name, and run.commands denies python3, node, bun and
+//  sh precisely because interpreters launder everything past the rules. A
+//  modelling tool that took scripts would hand all of that back.
+//
+//  Text in, text out, with a render when you want to look. The scene is
+//  returned as a table for the same reason desktop_browser_read exists: an
+//  agent reasons about a list of objects far better than about a picture of
+//  one.
+// ===========================================================================
+
+server.registerTool(
+  "desktop_blender_scene",
+  {
+    description:
+      "Read a 3D model as text: every object, where it is, how big it is, its modifiers and material. " +
+      "Do this before changing anything, the way you would read a page before clicking it. " +
+      "Models are named projects, kept in the person's Documents folder.",
+    inputSchema: {
+      project: z.string().describe('Project name, e.g. "bracket". Not a path.'),
+    },
+  },
+  guard("desktop_blender_scene", async (args: { project: string }) => {
+    const { policy, error } = await loadPolicy()
+    await gate("desktop_blender_scene", "blender",
+               decideGlobal(policy, "blender", `read the model "${args.project}"`),
+               error, `blender:${args.project}`)
+
+    const r = await blender.run(args.project, { ops: [] })
+    return say(
+      `${args.project} — ${r.scene.length} object${r.scene.length === 1 ? "" : "s"}\n\n` +
+        blender.describeScene(r.scene),
+    )
+  }),
+)
+
+server.registerTool(
+  "desktop_blender_model",
+  {
+    description:
+      "Build or change a 3D model by applying a list of operations, then optionally render it so you can see " +
+      "the result. Operations are applied in order and the file is saved ONLY if all of them succeed, so a " +
+      "failed batch leaves the model exactly as it was.\n" +
+      "\n" +
+      "  add          primitive: cube | sphere | cylinder | cone | torus | plane,\n" +
+      "               size, at [x,y,z], rotation_deg [x,y,z], name, and depth/thickness where they apply\n" +
+      "  transform    name, plus at [x,y,z] or move_by [x,y,z], rotation_deg, scale (number or [x,y,z])\n" +
+      "  modifier     name, kind: boolean (with, mode DIFFERENCE|UNION|INTERSECT) | array (count, offset)\n" +
+      "               | bevel (width, segments) | subdivide (levels) | solidify (thickness)\n" +
+      "  apply_modifiers   name — bake them into the mesh, needed before booleans against the result\n" +
+      "  material     name, material, color [r,g,b] 0-1, roughness, metallic\n" +
+      "  delete / rename   name (rename also takes to)\n" +
+      "\n" +
+      "You are good at parametric work — repeat, offset, bore, bevel, array. You are not sculpting; if the " +
+      "request is organic or artistic, say so rather than approximating it with primitives.",
+    inputSchema: {
+      project: z.string().describe('Project name, e.g. "bracket". Not a path.'),
+      ops: z.array(z.record(z.any())).describe("Operations, applied in order."),
+      render: z.boolean().optional().describe("Render afterwards and return the image. Slower; worth it to check your work."),
+      start: z.enum(["empty", "default"]).optional()
+        .describe('For a NEW project: "empty" (nothing) or "default" (Blender\'s cube, camera and light). Ignored if it exists.'),
+    },
+  },
+  guard("desktop_blender_model", async (args: {
+    project: string; ops: Array<Record<string, unknown>>; render?: boolean; start?: string
+  }) => {
+    const { policy, error } = await loadPolicy()
+    const summary = args.ops.map((o) => String(o.op ?? "?")).join(", ")
+    await gate("desktop_blender_model", "blender",
+               decideGlobal(policy, "blender", `${args.project}: ${summary}`),
+               error, `blender:${args.project}`)
+
+    const shot = args.render
+      ? path.join(blender.MODELS, `${args.project}.png`)
+      : undefined
+    const r = await blender.run(args.project, {
+      ops: args.ops, start: args.start ?? "empty",
+      ...(shot ? { render: shot, width: 800, height: 600 } : {}),
+    })
+
+    if (r.errors.length) {
+      throw new Refused(
+        `REFUSED: ${r.errors.join("; ")}\n` +
+          `  ${r.applied.length} earlier operation(s) were discarded — the file is unchanged, so the\n` +
+          "  scene still matches what you last read. Fix the operation and send the batch again.",
+      )
+    }
+
+    await audit(policy, `blender ${args.project}: ${summary}`)
+    const notes = [
+      `${args.project} — applied ${r.applied.length} operation(s)`,
+      ...r.applied.map((a) => `  ${a}`),
+      "",
+      blender.describeScene(r.scene),
+    ]
+    if (r.render) {
+      notes.push("", `rendered to ${r.render}`)
+      try {
+        const bytes = await fs.readFile(r.render)
+        return say(notes.join("\n"),
+                   [{ type: "image", data: bytes.toString("base64"), mimeType: "image/png" }])
+      } catch { notes.push("(the render could not be read back)") }
+    }
+    return say(notes.join("\n"))
   }),
 )
 

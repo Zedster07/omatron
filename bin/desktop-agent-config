@@ -47,6 +47,10 @@ DEFAULTS = {
         "remoteModel": "whisper-large-v3-turbo",
         "biasPrompt": True,
     },
+    # Where Blender is, when it is not on PATH. The portable build is the
+    # sensible install -- 1.2GB, no root, its own Python -- and it lives
+    # wherever you put it.
+    "blender": {"command": ""},
     "ai": {"assist": "route+plan", "provider": "auto",
            "claudeModel": "sonnet", "localModel": "llama3.2:3b"},
     "agent": {
