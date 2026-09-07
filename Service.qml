@@ -592,6 +592,9 @@ Item {
         yolo: root.yoloActive,
         yoloRemaining: root.yoloRemaining,
         voice: root.voiceAvailable,
+        // Reported separately, because they answer different questions and the
+        // panel was showing the first one under the second one's name.
+        speechReady: root.speechReady,
         voiceState: root.voiceState,
         // Reported so a test can ask the surface rather than guess from
         // pixels -- which is how the last two "it did not close" readings

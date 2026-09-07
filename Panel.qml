@@ -63,6 +63,11 @@ Panel {
         return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2);
     }
     readonly property bool voiceAvailable: service ? service.voiceAvailable : (ipcState.voice === true)
+    // Whether speech can actually produce a transcript. voiceAvailable only
+    // says the daemon's socket answers, and the status tile was printing that
+    // as "ready" -- so a machine set to remote with no API key reported voice
+    // ready while every attempt to speak would come back with nothing.
+    readonly property bool speechReady: service ? service.speechReady : (ipcState.speechReady === true)
     readonly property string voicePhase: service ? service.voiceState : String(ipcState.voiceState || "idle")
     readonly property bool listening: voicePhase === "listening"
 
@@ -755,8 +760,12 @@ Panel {
                                 model: [
                                     {
                                         k: "voice",
-                                        v: root.voiceAvailable ? "ready" : "offline",
-                                        ok: root.voiceAvailable
+                                        // Names the reason. "offline" and "no key"
+                                        // send someone to different places, and
+                                        // one word covering both sent them to the
+                                        // wrong one.
+                                        v: !root.voiceAvailable ? "offline" : root.speechReady ? "ready" : (root.s("voice.sttMode", "remote") === "remote" ? "no key" : "no model"),
+                                        ok: root.voiceAvailable && root.speechReady
                                     },
                                     {
                                         k: "waiting",
