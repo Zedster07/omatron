@@ -22,12 +22,17 @@ Item {
   id: root
 
   property var reply: null          // { text, said, at }
+  // Whether speaking back is even possible. The voice button greys out rather
+  // than disappearing: a control that vanishes reads as a bug, one that is
+  // visibly unavailable reads as a fact about the machine.
+  property bool voiceAvailable: false
   // !! rather than !== null: an unset binding arrives as undefined, and the
   // card showed itself with nothing in it the first time round.
   readonly property bool open: !!reply
 
   signal dismissed()
-  signal followUp()
+  signal followUp()                 // speak the next turn
+  signal typed(string text)         // type it instead
   signal save()
 
   // Reveal, shared with the other surfaces so the plugin moves one way.
@@ -64,6 +69,27 @@ Item {
 
     Item {
       id: cardWrap
+      // The keys live here because this is an ANCESTOR of the text field.
+      // A sibling catcher never sees them: unhandled keys travel up the focused
+      // item's parent chain, and the first version put the handler beside the
+      // input rather than above it, so Esc did nothing once the field had focus.
+      //
+      // Enter belongs to the field. Save is Ctrl+S, because a bare S would be
+      // swallowed the moment someone typed the word "so".
+      Keys.onPressed: function (event) {
+        if (event.key === Qt.Key_Escape) {
+          root.dismissed();
+          event.accepted = true;
+        } else if (event.key === Qt.Key_F10) {
+          if (root.voiceAvailable)
+            root.followUp();
+          event.accepted = true;
+        } else if (event.key === Qt.Key_S && (event.modifiers & Qt.ControlModifier)) {
+          root.save();
+          event.accepted = true;
+        }
+      }
+
       width: Math.min(Style.space(680), parent.width - Style.gapsOut * 2)
       height: Math.min(body.implicitHeight + Style.spacing.panelPadding * 2 + footer.implicitHeight,
                        parent.height - Style.gapsOut * 2)
@@ -157,6 +183,71 @@ Item {
 
         HudRail { width: parent.width; color: Theme.ok }
 
+        // Type the next turn.
+        //
+        // Voice was the only way to answer, which is wrong for the obvious
+        // cases -- a room with other people in it, a name that dictation will
+        // not get right, or simply preferring to type. The field takes focus
+        // when the card opens, so the natural thing to do is the thing that
+        // works.
+        Rectangle {
+          width: parent.width
+          height: Style.spacing.controlHeight + Style.spacing.md * 2
+          radius: Style.cornerRadius
+          color: Util.alpha(Color.foreground, 0.06)
+          border.width: Style.spacing.hairline
+          border.color: input.activeFocus ? Util.alpha(Theme.ok, 0.7) : Util.alpha(Color.foreground, 0.18)
+          Behavior on border.color { ColorAnimation { duration: Theme.fast } }
+
+          Text {
+            id: caret
+            anchors.left: parent.left
+            anchors.leftMargin: Style.spacing.xl
+            anchors.verticalCenter: parent.verticalCenter
+            text: "›"
+            color: Theme.ok
+            font.family: Style.font.family
+            font.pixelSize: Style.font.body
+          }
+
+          // Raw TextInput for the same reason as the command bar: the kit's
+          // TextField paints its own border, and this rectangle is already one.
+          TextInput {
+            id: input
+            anchors.left: caret.right
+            anchors.leftMargin: Style.spacing.md
+            anchors.right: parent.right
+            anchors.rightMargin: Style.spacing.xl
+            anchors.verticalCenter: parent.verticalCenter
+            color: Theme.cardText
+            selectionColor: Util.alpha(Theme.ok, 0.35)
+            selectedTextColor: Theme.cardText
+            font.family: Style.font.family
+            font.pixelSize: Style.font.body
+            clip: true
+            focus: root.open
+
+            onAccepted: {
+              var t = text.trim();
+              if (t.length === 0)
+                return;
+              text = "";
+              root.typed(t);
+            }
+
+            Text {
+              anchors.fill: parent
+              visible: input.text === "" && !input.activeFocus
+              text: "type a reply, or press F10 to speak"
+              verticalAlignment: Text.AlignVCenter
+              textFormat: Text.PlainText
+              color: Util.alpha(Theme.cardText, 0.35)
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+            }
+          }
+        }
+
         Row {
           anchors.right: parent.right
           spacing: Style.spacing.controlGap
@@ -170,7 +261,7 @@ Item {
             onClicked: root.dismissed()
           }
           Button {
-            text: "Save  S"
+            text: "Save  ^S"
             foreground: Color.foreground
             accent: Theme.ok
             bordered: true
@@ -178,14 +269,21 @@ Item {
             fontSize: Style.font.bodySmall
             onClicked: root.save()
           }
+          // Greyed rather than hidden when there is no speech path. A missing
+          // button is a mystery; a dim one with a tooltip is an answer.
           Button {
-            text: "Ask again  F10"
-            foreground: Theme.ok
+            text: "Reply with voice  F10"
+            enabled: root.voiceAvailable
+            opacity: root.voiceAvailable ? 1 : 0.4
+            foreground: root.voiceAvailable ? Theme.ok : Util.alpha(Color.foreground, 0.5)
             accent: Theme.ok
             bordered: true
-            focusable: true
+            focusable: root.voiceAvailable
             fontSize: Style.font.bodySmall
-            onClicked: root.followUp()
+            tooltipText: root.voiceAvailable
+              ? "Speak the next turn."
+              : "Speech is not available — the voice daemon is not running. Type instead."
+            onClicked: if (root.voiceAvailable) root.followUp()
           }
         }
       }
@@ -194,21 +292,5 @@ Item {
     // The keys. F9/F10 are global binds, and this surface holds an exclusive
     // grab -- so while it is up those binds do not fire and it must answer for
     // them itself, or the machine looks deaf.
-    Item {
-      anchors.fill: parent
-      focus: window.visible
-      Keys.onPressed: function (event) {
-        if (event.key === Qt.Key_Escape) {
-          root.dismissed();
-          event.accepted = true;
-        } else if (event.key === Qt.Key_F10 || event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-          root.followUp();
-          event.accepted = true;
-        } else if (event.key === Qt.Key_S) {
-          root.save();
-          event.accepted = true;
-        }
-      }
-    }
   }
 }

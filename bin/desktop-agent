@@ -864,8 +864,8 @@ usage: desktop-agent <command>
   stop                    stop a running agent (also: Super+F2, or the
                           stop button on the corner readout)
   save-answer "<said>" "<answer>"
-                          keep a spoken answer as markdown under
-                          ~/Documents/omatron-answers (the reply card's S key)
+                          keep an answer as markdown under
+                          ~/Documents/omatron-answers (the reply card's Ctrl+S)
   doctor                  health check
   setup                   install everything and register the keybinds
   uninstall               remove keybinds, schedules, units and state

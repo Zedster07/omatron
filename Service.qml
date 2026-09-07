@@ -399,6 +399,20 @@ Item {
     id: followUpProc
     command: ["desktop-agent-listen", "start", "command"]
   }
+  // A typed follow-up goes down the same pipe as a spoken one.
+  //
+  // Not a second path with its own rules: the daemon's "text" verb is what the
+  // command bar already uses, so a typed reply is matched, planned, gated and
+  // answered exactly as if it had been spoken. Anything else would be two sets
+  // of behaviour to keep honest.
+  function replyTyped(text) {
+    var t = String(text || "").trim();
+    if (t.length === 0)
+      return;
+    root.reply = null;
+    root.submitPrompt(t);
+  }
+
   function replyFollowUp() {
     root.reply = null;
     followUpProc.running = true;
@@ -648,10 +662,14 @@ Item {
   }
 
   ReplyCard {
-      reply: root.reply
-      onDismissed: root.dismissReply()
-      onFollowUp: root.replyFollowUp()
-      onSave: root.saveReply()
+    reply: root.reply
+    voiceAvailable: root.voiceAvailable
+    onDismissed: root.dismissReply()
+    onFollowUp: root.replyFollowUp()
+    onTyped: function (text) {
+      root.replyTyped(text);
+    }
+    onSave: root.saveReply()
   }
 
   RecapCard {
