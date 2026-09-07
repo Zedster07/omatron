@@ -12,6 +12,8 @@
 const DEFAULT_WORKSPACE = 10
 
 /** Quote one argv element for a shell command line. */
+import { descendants } from "./killtree.ts"
+
 export function shq(a: string): string {
   return /^[A-Za-z0-9_@%+=:,./-]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`
 }
@@ -318,7 +320,34 @@ export function abortAgentTerminal(): void {
     // never ran. The abort became the thing that bricked the session it was
     // written to rescue. C-u is safe in both states -- it clears a partial
     // line and does nothing at an empty one.
+    // C-c first: it is the polite stop, it reaches a well-behaved foreground
+    // program, and it leaves the pane's own shell alone.
     Bun.spawnSync(["tmux", "send-keys", "-t", TARGET, "C-c"])
+
+    // Then the tree, because C-c is SIGINT to the FOREGROUND PROCESS GROUP and
+    // that is not the same as stopping the work.
+    //
+    // Anything backgrounded, detached, or trapping SIGINT survived it -- while
+    // the STOP button on the HUD, `desktop-agent stop` and the idle watchdog
+    // all reported the run as stopped. A control that says it stopped
+    // something it did not is the failure this whole path is judged on, and
+    // the direct path has used killTree for exactly this reason since it
+    // learned the same lesson about subagents.
+    //
+    // Descendants of the pane's shell, never the shell itself: that process IS
+    // the window, and killing it would take the session the person is watching
+    // with it.
+    try {
+      const q = Bun.spawnSync(["tmux", "display-message", "-p", "-t", TARGET, "#{pane_pid}"])
+      const panePid = Number(new TextDecoder().decode(q.stdout).trim())
+      if (Number.isInteger(panePid) && panePid > 0) {
+        for (const child of descendants(panePid)) {
+          try { process.kill(child, "SIGKILL") } catch {}
+        }
+      }
+    } catch {}
+
+    // Clear whatever is left on the line, in either state.
     Bun.spawnSync(["tmux", "send-keys", "-t", TARGET, "C-u"])
   } catch {}
 }
