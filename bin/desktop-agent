@@ -95,6 +95,12 @@ doctor() {
     bad "not installed as an Omarchy plugin — no panel, no HUD, no approval overlay  (omarchy plugin add https://github.com/Zedster07/omatron --enable)"
   fi
 
+  if [[ -f "$HOME/.config/desktop-agent/settings.json" ]]; then
+    ok "settings present (workspace $(desktop-agent-config get agent.workspace 2>/dev/null || echo '?'))"
+  else
+    warn "no settings.json — defaults are being guessed by each component separately  (run: desktop-agent-config init)"
+  fi
+
   echo; bold "Policy"
   if [[ -f "$HOME/.config/desktop-agent/policy.jsonc" ]]; then
     ok "policy present"
@@ -378,6 +384,18 @@ case "${1:-doctor}" in
 
   setup)
     mkdir -p "$HOME/.config/desktop-agent" "$UNITS"
+
+    # Settings on disk before anything reads them.
+    #
+    # The defaults lived in two places -- this CLI and the TypeScript runtime --
+    # and had drifted: agent.workspace was 10 here and 0 there, where 0 means
+    # confinement OFF. On a fresh machine with no settings.json the runtime used
+    # its own copy, so the agent's browser opened on whatever workspace the
+    # person was looking at, while the panel confidently displayed 10.
+    #
+    # Writing the file makes one answer authoritative and stops the fallbacks
+    # deciding anything. Existing settings are never touched.
+    desktop-agent-config init >/dev/null 2>&1 || true
 
     # Seed the policy on first run.
     #

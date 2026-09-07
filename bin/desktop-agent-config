@@ -617,6 +617,27 @@ def main(argv):
         print("true" if (m and m.group(1) == "true") else "false")
         return 0
 
+    if cmd == "init":
+        # Write the defaults to disk, once, so nothing has to guess them later.
+        #
+        # DEFAULTS lived here in Python while the TypeScript side carried its
+        # own copies, and they had drifted: agent.workspace was 10 here and 0
+        # in workspace.ts, where 0 means "confinement off". On a fresh machine
+        # settings.json does not exist, so the runtime used its copy and the
+        # agent's browser opened on whatever workspace the person was looking
+        # at -- while the panel, reading this file's defaults, displayed 10.
+        #
+        # A duplicated constant is only ever right by coincidence. Writing the
+        # file at setup means there is one answer on disk and the fallbacks
+        # stop deciding anything.
+        if os.path.exists(CFG) and not (len(argv) > 2 and argv[2] == "--force"):
+            print("settings already exist")
+            return 0
+        os.makedirs(os.path.dirname(CFG), exist_ok=True)
+        save(json.loads(json.dumps(DEFAULTS)))
+        print(CFG)
+        return 0
+
     if cmd == "speech-ready":
         # Can speech actually produce a transcript on this machine?
         #

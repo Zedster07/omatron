@@ -9,7 +9,9 @@ const HOME = process.env.HOME!
 const PATH = `${HOME}/.config/desktop-agent/settings.json`
 
 const DEFAULTS: Record<string, unknown> = {
-  "voice.sttMode": "local",
+  // Matches bin/desktop-agent-config DEFAULTS, which said remote while this
+  // said local. Whichever ran first decided, which is not a design.
+  "voice.sttMode": "remote",
   "voice.biasPrompt": true,
   // The full path, and no longer offered as a choice.
   //

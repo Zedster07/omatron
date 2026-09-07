@@ -73,6 +73,9 @@ export function isLaunch(argv: string[]): boolean {
  * MCP server, the browser and the voice executor cannot disagree about where
  * the agent's windows go.
  */
+// Kept equal to "agent.workspace" in bin/desktop-agent-config's DEFAULTS.
+const CONFINE_DEFAULT = 10
+
 export function confinementWorkspace(): number {
   const fromEnv = Number(process.env.DESKTOP_AGENT_WORKSPACE)
   if (Number.isFinite(fromEnv) && fromEnv > 0) return fromEnv
@@ -80,8 +83,21 @@ export function confinementWorkspace(): number {
     const raw = require("node:fs").readFileSync(
       `${process.env.HOME}/.config/desktop-agent/settings.json`, "utf8")
     const n = Number(JSON.parse(raw)?.agent?.workspace)
-    return Number.isFinite(n) && n > 0 ? n : 0
-  } catch { return 0 }
+    // An explicit number in the file wins, including 0, which means off.
+    return Number.isFinite(n) ? (n > 0 ? n : 0) : CONFINE_DEFAULT
+  } catch {
+    // No settings file: a fresh install, before anything has been changed.
+    // This returned 0 -- which does not mean "unknown", it means CONFINEMENT
+    // OFF. No window rule was registered, so the agent's browser opened on
+    // whatever workspace the person was looking at, while the panel displayed
+    // 10 because it reads the defaults from desktop-agent-config, where the
+    // number was right all along.
+    //
+    // `desktop-agent-config init` writes the file at setup now, so this should
+    // not be reached. It agrees with that file regardless, because a
+    // duplicated constant that disagrees is exactly how this happened.
+    return CONFINE_DEFAULT
+  }
 }
 
 /**
