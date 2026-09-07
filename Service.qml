@@ -125,6 +125,36 @@ Item {
   property real voiceElapsed: 0
   property bool voiceAvailable: false
 
+  // Whether speech can actually produce a transcript, which is NOT the same
+  // question as whether the daemon is up.
+  //
+  // voiceAvailable only tests that the socket answers. The daemon comes up
+  // perfectly happily with no way to transcribe -- on remote with no API key
+  // it records, posts nowhere and returns nothing -- so a card offering
+  // "Reply with voice" as a live button led somewhere that could not work.
+  // Asked of the config, which knows the mode and whether the key or the local
+  // model is there.
+  property bool speechReady: false
+  Process {
+    id: speechReadyProc
+    command: ["desktop-agent-config", "speech-ready"]
+    stdout: SplitParser {
+      onRead: function (line) {
+        root.speechReady = String(line).trim() === "true";
+      }
+    }
+  }
+  // Re-asked on the same beat as everything else, because a key can be added
+  // from the panel while this card is on screen.
+  Timer {
+    interval: 4000
+    running: true
+    repeat: true
+    triggeredOnStart: true
+    onTriggered: if (!speechReadyProc.running)
+      speechReadyProc.running = true
+  }
+
   // ----------------------------------------------------------------- recap
 
   property var recap: null
@@ -663,7 +693,8 @@ Item {
 
   ReplyCard {
     reply: root.reply
-    voiceAvailable: root.voiceAvailable
+    // Both, because either being false means speaking cannot work.
+    voiceAvailable: root.voiceAvailable && root.speechReady
     onDismissed: root.dismissReply()
     onFollowUp: root.replyFollowUp()
     onTyped: function (text) {

@@ -611,6 +611,23 @@ def main(argv):
         print("true" if (m and m.group(1) == "true") else "false")
         return 0
 
+    if cmd == "speech-ready":
+        # Can speech actually produce a transcript on this machine?
+        #
+        # Distinct from "is the daemon running", which is all the panel used to
+        # ask. The daemon comes up happily with no way to transcribe: on remote
+        # with no API key it records, posts nowhere, and returns nothing -- so
+        # the reply card offered "Reply with voice" as a live button leading to
+        # a dead end. A control that asserts a capability the machine does not
+        # have is the failure this project keeps finding, and this is the
+        # question it should have been asking.
+        mode = str((load().get("voice") or {}).get("sttMode") or "local")
+        if mode == "remote":
+            print("true" if has_secret() else "false")
+        else:
+            print("true" if local_ready() else "false")
+        return 0
+
     if cmd == "all":
         d = load()
         d["voice"]["hasRemoteKey"] = has_secret()

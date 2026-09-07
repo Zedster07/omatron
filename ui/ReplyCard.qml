@@ -282,7 +282,7 @@ Item {
             fontSize: Style.font.bodySmall
             tooltipText: root.voiceAvailable
               ? "Speak the next turn."
-              : "Speech is not available — the voice daemon is not running. Type instead."
+              : "Speech cannot run: either the voice daemon is down, or the transcription mode has no way to work — remote with no API key, or local with no model. Type instead, or check the Voice tab."
             onClicked: if (root.voiceAvailable) root.followUp()
           }
         }
