@@ -20,6 +20,11 @@ const LAUNDERERS = new Set([
   "python", "python3", "perl", "ruby", "node", "bun", "deno", "lua", "awk",
   "ssh", "scp", "sftp", "nc", "ncat", "socat", "telnet",
   "sudo", "pkexec", "doas", "su", "runuser",
+  // Not shells, and that is exactly why they were missed: ordinary utilities
+  // whose entire job is to exec something else. "timeout 10 <anything>" walked
+  // straight past this filter because only the first word was ever judged.
+  "timeout", "nice", "ionice", "stdbuf", "nohup", "setsid", "chrt", "taskset",
+  "unshare", "flatpak-spawn", "systemd-run", "busybox",
 ])
 
 /**
@@ -37,7 +42,11 @@ const DESTRUCTIVE = new Set([
   "git", "curl", "wget", "rsync",
   // The agent's own controls: a voice command must not be able to widen its
   // own leash or answer its own approval prompts.
-  "desktop-agent", "desktop-agent-arm", "qs", "hyprctl", "voxtype",
+  // desktop-agent-config was named in a check further down but never listed
+  // here, so the argument scan never saw it -- and the argument scan is the
+  // half that catches it hiding behind a launcher.
+  "desktop-agent", "desktop-agent-config", "desktop-agent-arm", "desktop-yolo",
+  "qs", "hyprctl", "voxtype",
 ])
 
 export interface Refusal { ok: false; reason: string; token: string }

@@ -419,7 +419,60 @@ async function withCdp<T>(fn: (send: (m: string, p?: any) => Promise<any>) => Pr
  * about:blank, so opening the first page would otherwise leave an empty tab
  * behind every single time.
  */
-export async function openTab(url: string): Promise<{ url: string; title: string; tabs: number }> {
+/**
+ * Only the web. Checked before any navigation, in one place.
+ *
+ * Chromium opens file:// as readily as https://, and renders the file's text
+ * into the DOM -- which desktop_browser_read then returns verbatim. So the
+ * browser was a way to read any file on the machine while bypassing the path
+ * rules entirely: policy.paths, NEVER_YOLO_PATHS and the deny list on
+ * ~/.config/desktop-agent all govern desktop_write and desktop_run, and none
+ * of them was ever consulted here. The secret store this plugin just gained
+ * would have been readable through it.
+ *
+ * Loopback is a judgement call and it is the person's to make, so it is a
+ * setting rather than a rule. "Review my app on localhost:3000" is a real and
+ * common request -- refusing it outright would be closing a door nobody walks
+ * through to stop something the agent can already do with curl. The metadata
+ * endpoint is different: nothing legitimate asks for 169.254.169.254.
+ */
+function requireWebUrl(raw: string, allowLoopback = true): string {
+  let u: URL
+  try {
+    u = new URL(raw)
+  } catch {
+    throw new Error(`"${raw}" is not a URL. Give a full address including https://`)
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") {
+    throw new Error(
+      `REFUSED: the agent browser only opens http:// and https://, not "${u.protocol}".\n` +
+        "  file:// would render a local file into the page and hand it back through\n" +
+        "  desktop_browser_read, going around every rule about which paths you may read.\n" +
+        "  To read a file, use the tools meant for it, where the path rules apply.",
+    )
+  }
+  const host = u.hostname.toLowerCase()
+  // Link-local metadata. No browser task ever wants this, and on a cloud box
+  // it hands out credentials to anyone who asks.
+  if (host === "169.254.169.254" || host.startsWith("169.254.")) {
+    throw new Error(
+      `REFUSED: "${u.hostname}" is a link-local metadata address, not a page.`,
+    )
+  }
+  const loopback =
+    host === "localhost" || host === "::1" || host === "0.0.0.0" ||
+    host.endsWith(".localhost") || /^127(\.\d{1,3}){3}$/.test(host)
+  if (loopback && !allowLoopback) {
+    throw new Error(
+      `REFUSED: "${u.hostname}" is this machine, and "browser.allowLocalhost" is false in the policy.\n` +
+        "  Set it true if you want the agent looking at your own dev server.",
+    )
+  }
+  return u.toString()
+}
+
+export async function openTab(url: string, allowLoopback = true): Promise<{ url: string; title: string; tabs: number }> {
+  url = requireWebUrl(url, allowLoopback)
   const port = requireOurs()
   const before = (await targets()).filter(isRealPage)
   const blank = before.find((t) => t.url === "about:blank" || t.url === "")
@@ -460,7 +513,8 @@ export async function openTab(url: string): Promise<{ url: string; title: string
   return { ...page, tabs: before.length + 1 }
 }
 
-export async function navigate(url: string): Promise<{ url: string; title: string }> {
+export async function navigate(url: string, allowLoopback = true): Promise<{ url: string; title: string }> {
+  url = requireWebUrl(url, allowLoopback)
   return withCdp(async (send) => {
     await send("Page.enable")
     await send("Page.navigate", { url })

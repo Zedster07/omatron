@@ -240,14 +240,29 @@ export async function handOff(
   const runDir = `${STATE}/run`
   try { require("node:fs").mkdirSync(runDir, { recursive: true }) } catch {}
 
-  // Writable: its own state, and the runner's own config directory so a token
-  // refresh does not fail on a read-only mount. Everything else is read-only,
-  // and the compositor sockets are not there at all.
+    // Writable: its own working directory and where reports go, plus the
+    // runner's own config directory so a token refresh does not fail on a
+    // read-only mount. Everything else is read-only, and the compositor
+    // sockets are not there at all.
+    //
+    // NOT the whole of STATE, which is what this used to mount. Two of the
+    // things the sandbox exists to protect live directly in it:
+    //
+    //   yolo.json   the lease the server reads to decide whether ask means yes
+    //   disabled    the kill switch, whose mere existence denies everything
+    //
+    // A sandboxed runner keeps its own shell, so a writable STATE let it write
+    // itself an hour-long lease and delete the kill switch from inside the
+    // sandbox -- the one file whose whole purpose is to be reachable when
+    // nothing else is. The confinement was handing over the controls it exists
+    // to enforce.
+    const reportsDir = `${STATE}/runs`
+    try { require("node:fs").mkdirSync(reportsDir, { recursive: true }) } catch {}
   const argv = bridge
     ? sandboxArgv(prepared.argv, {
         socket: bridge.socket,
         writable: [
-          STATE, runDir,
+            runDir, reportsDir,
           // Where the runners actually keep state. A read-only mount here does
           // not fail at startup, it fails on the first token refresh or cache
           // write -- late, and looking like something else.

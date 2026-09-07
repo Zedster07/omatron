@@ -170,6 +170,10 @@ print(" ".join(sorted("mcp__desktop__" + t for t in have if "mcp__desktop__" + t
       warn "shadowed names in the plugin's own source — run: $PLUGIN_DIR/bin/check-shadowing"
     fi
   fi
+  if have bun && [[ -f "$PLUGIN_DIR/bin/check-tool-sets.ts" ]]; then
+    bun "$PLUGIN_DIR/bin/check-tool-sets.ts" >/dev/null 2>&1 \
+      || warn "a tool is missing from INPUT_TOOLS or MASTER_ONLY — run: bun $PLUGIN_DIR/bin/check-tool-sets.ts"
+  fi
 
   echo; bold "Planning provider"
   # Installed is not the same as working.

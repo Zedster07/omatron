@@ -191,7 +191,15 @@ const JOB_ID = process.env.DESKTOP_AGENT_JOB?.trim() || ""
 let awaitingApproval = 0
 
 /** Tools that could answer an approval card, so they cannot run beside one. */
-const INPUT_TOOLS = new Set(["desktop_mouse", "desktop_key", "desktop_type"])
+// Tools that synthesise input, and therefore must not run while the person is
+// being asked something.
+//
+// desktop_type_secret was missing, which is the worst possible omission for
+// this particular set: it types a credential, and without the guard it could
+// do so into an approval card that was on screen at that moment, or while one
+// of our own surfaces held keyboard focus. Adding a tool means adding it here;
+// nothing enforces that, which is how it was missed.
+const INPUT_TOOLS = new Set(["desktop_mouse", "desktop_key", "desktop_type", "desktop_type_secret"])
 
 const ROLE = process.env.DESKTOP_AGENT_ROLE?.trim() || "master"
 const IS_SUBAGENT = ROLE !== "master"
@@ -223,6 +231,7 @@ const MASTER_ONLY: Record<string, string> = {
   // master's, precisely because there is only one of it.
   desktop_mouse: "the pointer belongs to the master — there is only one",
   desktop_type: "typing into windows belongs to the master — there is one keyboard focus",
+  desktop_type_secret: "typing into windows belongs to the master — there is one keyboard focus",
   desktop_key: "sending keystrokes belongs to the master — there is one keyboard focus",
   desktop_workspace: "switching workspaces belongs to the master — it moves the whole screen",
   desktop_window: "moving and focusing windows belongs to the master",
@@ -364,7 +373,7 @@ type Policy = {
   run: { commands: Record<string, Action>; timeoutMs: number; maxOutputBytes: number; cwd: string }
   paths: Record<string, Action>
   write: { maxBytes: number; backup: boolean }
-  browser: { command: string; headless: boolean }
+  browser: { command: string; headless: boolean; allowLocalhost: boolean }
   yolo: { enabled: boolean; maxMinutes: number }
   audit: boolean
 }
@@ -385,7 +394,7 @@ const CLOSED: Policy = {
   run: { commands: {}, timeoutMs: 0, maxOutputBytes: 0, cwd: "" },
   paths: {},
   write: { maxBytes: 0, backup: true },
-  browser: { command: "", headless: false },
+  browser: { command: "", headless: false, allowLocalhost: true },
   yolo: { enabled: false, maxMinutes: 0 },
   audit: true,
 }
@@ -711,6 +720,11 @@ async function loadPolicy(): Promise<{ policy: Policy; error?: string }> {
     browser: {
       command: typeof parsed.browser?.command === "string" ? parsed.browser.command : "",
       headless: parsed.browser?.headless === true,
+      // Defaults true: "look at my app on localhost:3000" is a normal
+      // request, and refusing it closes a door nobody walks through to stop
+      // something the agent can already do another way. Set it false on a
+      // machine where reaching a loopback service actually matters.
+      allowLocalhost: parsed.browser?.allowLocalhost !== false,
     },
     // Opt-in, unlike everything else here which defaults to "ask". An absent
     // "yolo" section means no lease can ever take effect.
@@ -3139,6 +3153,23 @@ server.registerTool(
     // refused from speech; desktop_run was a third route, and under a lease it
     // was auto-approved silently, so "policy-set-yolo true" bought the agent a
     // permanent one.
+    // Every token, not just the first.
+    //
+    // SELF_CONTROL and NEVER_YOLO tested args.command alone, so a launcher put
+    // anything behind them: `timeout 10 desktop-agent-config policy-set-yolo
+    // true` had base "timeout", matched nothing, fell through to "*": "ask",
+    // and was auto-approved under a lease. The same shape reached rm. Shells
+    // and interpreters were already denied by name; these are not shells, they
+    // are ordinary utilities whose job is to exec something else.
+    const argvTokens = [base, ...(args.args ?? []).map((a) => path.basename(a))]
+    const launderedSelf = argvTokens.find((t) => SELF_CONTROL.has(t))
+    if (launderedSelf && launderedSelf !== base) {
+      throw new Refused(
+        `REFUSED: "${launderedSelf}" is this plugin's own control command, and passing it as an\n` +
+          `  argument to "${base}" does not change that. Refused wherever it appears.`,
+      )
+    }
+
     if (SELF_CONTROL.has(base)) {
       throw new Refused(
         `REFUSED: "${base}" is this plugin's own control command.\n` +
@@ -3174,7 +3205,12 @@ server.registerTool(
       d,
       error,
       `cmd:${base}`,
-      neverYolo(base, argv) ? `"${base}" is destructive and is never auto-approved` : undefined,
+      // Checked across every token for the same reason: a lease must not
+      // promote "timeout 10 rm -rf ..." just because the first word is benign.
+      (() => {
+        const t = argvTokens.find((tok) => neverYolo(tok, argv))
+        return t ? `"${t}" is destructive and is never auto-approved` : undefined
+      })(),
     )
 
     const bin = path.isAbsolute(cmd) ? cmd : Bun.which(cmd)
@@ -3457,11 +3493,11 @@ server.registerTool(
     // loses work. Blank tabs are still reused, so the first open after launch
     // does not leave the browser's about:blank behind.
     if (args.reuse_tab) {
-      const page = await browser.navigate(args.url)
+      const page = await browser.navigate(args.url, policy.browser.allowLocalhost)
       await audit(policy, `browser navigate ${args.url} (reused the tab)`)
       return say(`Opened ${page.url} in the current tab.\nTitle: ${page.title || "(none)"}\n\nRead it with desktop_browser_read.`)
     }
-    const page = await browser.openTab(args.url)
+    const page = await browser.openTab(args.url, policy.browser.allowLocalhost)
     await audit(policy, `browser open ${args.url} (tab ${page.tabs})`)
     return say(
       `Opened ${page.url} in a new tab (${page.tabs} open).\n` +
