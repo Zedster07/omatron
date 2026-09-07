@@ -486,6 +486,21 @@ and a naive match rewrites that instead of the setting.
 (`workspaces`, `apps`, `paths`, `run.commands`) are still edited there: they
 are rule sets, not switches. "Edit policy" in the Policy tab opens it.
 
+## What leaves the machine
+
+With `voice.sttMode: local` nothing does — transcription runs here.
+
+With `remote`, the audio goes to the endpoint you configured, and so does the
+bias prompt when `voice.biasPrompt` is on. That prompt is built from your
+command registry and the names of your installed applications, so the provider
+learns what is on the machine and what you have taught it to do — which is a
+different disclosure from "my speech is transcribed elsewhere", and worth
+knowing before choosing the mode.
+
+The API key is read from a 0600 file, sent only as an `Authorization` header,
+and never printed: `desktop-agent-config` will tell you whether one is set and
+nothing more.
+
 ## Logging in without handing over the password
 
 The agent can use a credential without ever seeing it.

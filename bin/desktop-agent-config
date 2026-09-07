@@ -476,6 +476,21 @@ def main(argv):
         print(want)
         return 0
 
+    if cmd == "policy-lease-max":
+        # The ceiling the SERVER enforces, so the panel can clamp to the same
+        # number instead of a constant of its own and then display a lease
+        # nobody honours.
+        path = os.path.expanduser("~/.config/desktop-agent/policy.jsonc")
+        try:
+            raw = open(path).read()
+        except OSError:
+            print(60)
+            return 0
+        body = re.sub(r"^\s*//.*$", "", raw, flags=re.M)
+        m = re.search(r'"yolo"\s*:\s*\{[^}]*?"maxMinutes"\s*:\s*(\d+)', body, re.S)
+        print(int(m.group(1)) if m else 60)
+        return 0
+
     if cmd in ("policy-caps", "policy-set-cap"):
         # The capability table, the last big block of the policy that could
         # only be changed by editing the file. Fourteen allow/ask/deny rows is

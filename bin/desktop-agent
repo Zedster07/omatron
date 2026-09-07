@@ -175,6 +175,19 @@ print(" ".join(sorted("mcp__desktop__" + t for t in have if "mcp__desktop__" + t
       || warn "a tool is missing from INPUT_TOOLS or MASTER_ONLY — run: bun $PLUGIN_DIR/bin/check-tool-sets.ts"
   fi
 
+  # A config written before the role default flipped is now a subagent, and
+  # loses the browser, delegation, scheduling, mouse and keyboard. That is the
+  # safe direction, but it must not be a silent one.
+  for f in "$HOME/.claude.json" "$HOME/.gemini/settings.json" "$HOME/.codex/config.toml" "$HOME/.config/opencode/opencode.json"; do
+    [[ -f "$f" ]] || continue
+    grep -q 'DESKTOP_AGENT_IDENTITY' "$f" 2>/dev/null || continue
+    if grep -q 'DESKTOP_AGENT_ROLE' "$f" 2>/dev/null; then
+      ok "$(basename "$f") declares the master role"
+    else
+      bad "$(basename "$f") does not declare DESKTOP_AGENT_ROLE — that server now runs as a SUBAGENT and cannot use the browser, delegation or scheduling  (fix: desktop-agent mcp-install)"
+    fi
+  done
+
   echo; bold "Planning provider"
   # Installed is not the same as working.
   #
@@ -585,7 +598,7 @@ if target in ("all", "claude"):
                 "type": "stdio",
                 "command": bun,
                 "args": ["run", server_ts],
-                "env": { "DESKTOP_AGENT_IDENTITY": "claude" },
+                "env": { "DESKTOP_AGENT_IDENTITY": "claude", "DESKTOP_AGENT_ROLE": "master" },
             }
             json.dump(d, open(cfg, "w"), indent=2)
             print("  ✓ Claude Code (~/.claude.json): registered")
@@ -609,7 +622,7 @@ if target in ("all", "gemini"):
             servers["desktop"] = {
                 "command": bun,
                 "args": ["run", server_ts],
-                "env": { "DESKTOP_AGENT_IDENTITY": "gemini" },
+                "env": { "DESKTOP_AGENT_IDENTITY": "gemini", "DESKTOP_AGENT_ROLE": "master" },
             }
             json.dump(d, open(cfg, "w"), indent=2)
             print("  ✓ Gemini CLI (~/.gemini/settings.json): registered")
@@ -628,7 +641,7 @@ if target in ("all", "codex"):
             if os.path.exists(cfg):
                 content = open(cfg).read()
                 shutil.copy(cfg, f"{cfg}.bak.{int(time.time())}")
-            snippet = f'[mcp_servers.desktop]\ncommand = "{bun}"\nargs = ["run", "{server_ts}"]\nenv = {{ DESKTOP_AGENT_IDENTITY = "codex" }}\n'
+            snippet = f'[mcp_servers.desktop]\ncommand = "{bun}"\nargs = ["run", "{server_ts}"]\nenv = {{ DESKTOP_AGENT_IDENTITY = "codex", DESKTOP_AGENT_ROLE = "master" }}\n'
             # Rewrite the block rather than skipping it when one exists.
             #
             # This used to print "already present" and change nothing, which
@@ -676,7 +689,7 @@ if target in ("all", "opencode"):
             mcp["desktop"] = {
                 "type": "local",
                 "command": [bun, "run", server_ts],
-                "environment": { "DESKTOP_AGENT_IDENTITY": "opencode" },
+                "environment": { "DESKTOP_AGENT_IDENTITY": "opencode", "DESKTOP_AGENT_ROLE": "master" },
                 "enabled": True,
             }
             json.dump(d, open(cfg, "w"), indent=2)

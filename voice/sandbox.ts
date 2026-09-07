@@ -70,7 +70,9 @@ export async function startBridge(name: string, env: Record<string, string>): Pr
 
   const server = new URL("../server/server.ts", import.meta.url).pathname
   const proc = Bun.spawn(
-    [socat, `UNIX-LISTEN:${socket},fork,mode=600`, `EXEC:${bun} run ${server}`],
+    [socat, // fork so concurrent tool calls each get a server; max-children so an agent
+      // holding the socket cannot spawn them until the machine runs out of memory.
+      `UNIX-LISTEN:${socket},fork,max-children=16,mode=600`, `EXEC:${bun} run ${server}`],
     { stdout: "ignore", stderr: "ignore", stdin: "ignore", env: { ...process.env, ...env } },
   )
 

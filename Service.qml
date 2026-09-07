@@ -162,7 +162,30 @@ Item {
     root.yoloRemaining = left
   }
 
+  // The policy's ceiling, read from the file the server enforces it from.
+  //
+  // The panel used to clamp at a constant 240 while policy.yolo.maxMinutes was
+  // 60. The server re-clamps at read time, so the extra time was never
+  // honoured -- but it WAS displayed: yoloStatus reported four hours and the
+  // countdown ran from that. Showing a lease that does not exist is the same
+  // class as the kill-switch flag this panel used to report instead of the
+  // policy, and it is worth being exact about because the number's whole job
+  // is to tell someone how long they have.
+  property int policyLeaseMax: 60
+  Process {
+    id: leaseMaxProc
+    command: ["desktop-agent-config", "policy-lease-max"]
+    stdout: SplitParser {
+      onRead: function (line) {
+        var n = parseInt(String(line).trim(), 10)
+        if (!isNaN(n) && n > 0)
+          root.policyLeaseMax = n
+      }
+    }
+  }
+
   function grantYolo(minutes) {
+    minutes = Math.max(1, Math.min(minutes, root.policyLeaseMax))
     var now = Date.now()
     var until = now + minutes * 60000
     var payload = JSON.stringify({ until: until, grantedAt: now, minutes: minutes, by: "bar" })
@@ -480,8 +503,9 @@ Item {
 
     function yolo(minutes: int): string {
       if (minutes <= 0) { root.endYolo(); return "off" }
-      root.grantYolo(Math.min(minutes, 240))
-      return "on for " + minutes + " min (clamped by policy)"
+      var granted = Math.max(1, Math.min(minutes, root.policyLeaseMax))
+      root.grantYolo(granted)
+      return "on for " + granted + " min" + (granted < minutes ? " (clamped by policy)" : "")
     }
     function yoloOff(): string { root.endYolo(); return "off" }
     function yoloStatus(): string {

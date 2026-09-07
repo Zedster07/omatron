@@ -358,7 +358,31 @@
     // Communication: let it read and click, but never send on your behalf
     // without a prompt. Change "input" to "allow" when you want it to reply.
     "class:chrome-app.slack.com*": { "see": "allow", "focus": "allow", "manage": "allow", "input": "ask" },
-    "class:chrome-mail.google.com*": { "see": "allow", "focus": "allow", "manage": "allow", "input": "ask" }
+    "class:chrome-mail.google.com*": { "see": "allow", "focus": "allow", "manage": "allow", "input": "ask" },
+
+    // ---- identity that cannot be renamed
+    //
+    // Everything above matches on a name the window chose for itself: class is
+    // a command-line flag, title is document.title. So a terminal started as
+    // `foot --app-id=agent-browser` matched "class:agent-browser" and got
+    // input: allow -- the exact rule that stops an agent typing shell commands
+    // into a shell. Demonstrated on a real window before these lines existed.
+    //
+    // "exe:" is resolved from /proc/<pid>/exe, which a process cannot rename
+    // for itself. LAST MATCH WINS, so these sit at the bottom and settle any
+    // disagreement between what a window claims and what it actually is.
+    //
+    // Add your own for anything that matters. The names above stay useful --
+    // they are convenient and usually honest -- but they are hints now, not
+    // the boundary.
+    "exe:foot": { "see": "allow", "focus": "allow", "manage": "allow" },
+    "exe:kitty": { "see": "allow", "focus": "allow", "manage": "allow" },
+    "exe:alacritty": { "see": "allow", "focus": "allow", "manage": "allow" },
+    "exe:wezterm-gui": { "see": "allow", "focus": "allow", "manage": "allow" },
+    "exe:ghostty": { "see": "allow", "focus": "allow", "manage": "allow" },
+    "exe:konsole": { "see": "allow", "focus": "allow", "manage": "allow" },
+    "exe:gnome-terminal-server": { "see": "allow", "focus": "allow", "manage": "allow" },
+    "exe:xterm": { "see": "allow", "focus": "allow", "manage": "allow" }
   },
 
   // --------------------------------------------------------------------------
@@ -493,6 +517,20 @@
       // to look at afterwards, that is desktop_screenshot with save: true --
       // it keeps the REDACTED capture. Allowing grim to get artifacts trades
       // away the password managers and 2FA windows the redaction exists for.
+      // Terminals. Not because running one is dangerous, but because a window
+      // is what comes out, and a window can claim any class it likes -- which
+      // was how "foot --app-id=agent-browser" turned the terminal input rule
+      // into the browser's. The exe: rules above settle that properly; this
+      // stops the launch being free under a lease as well.
+      "foot": "deny",
+      "kitty": "deny",
+      "alacritty": "deny",
+      "wezterm": "deny",
+      "wezterm-gui": "deny",
+      "ghostty": "deny",
+      "konsole": "deny",
+      "gnome-terminal": "deny",
+      "xterm": "deny",
       "grim": "deny",
       "slurp": "deny",
       "wf-recorder": "deny",

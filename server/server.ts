@@ -201,7 +201,26 @@ let awaitingApproval = 0
 // nothing enforces that, which is how it was missed.
 const INPUT_TOOLS = new Set(["desktop_mouse", "desktop_key", "desktop_type", "desktop_type_secret"])
 
-const ROLE = process.env.DESKTOP_AGENT_ROLE?.trim() || "master"
+/**
+ * Master or subagent, and the default is the safe half.
+ *
+ * This read `|| "master"`, so the PRIVILEGED role was what you got by
+ * accident: an env var dropped by a wrapper, a runner that sanitises its
+ * child environment, a config written without the env block, or a subagent
+ * that starts a server itself -- every one of those produced a master, and
+ * MASTER_ONLY (the browser, delegation, scheduling, mouse, keyboard) is
+ * enforced from this line.
+ *
+ * A master is declared now. Both honest paths already declare it --
+ * voice/agent.ts sets it for the real master and `desktop-agent mcp-install`
+ * writes it into every runner config -- so nothing changes when things go
+ * right. What changes is which way it fails when they do not.
+ *
+ * The cost is a migration: a config written before this is now a subagent and
+ * loses the master-only tools. That is the direction to be wrong in, and
+ * `desktop-agent doctor` names any config missing the declaration.
+ */
+const ROLE = process.env.DESKTOP_AGENT_ROLE?.trim() || "subagent"
 const IS_SUBAGENT = ROLE !== "master"
 
 const MASTER_ONLY: Record<string, string> = {
@@ -836,7 +855,13 @@ async function audit(policy: Policy, line: string) {
   if (!policy.audit) return
   try {
     await fs.mkdir(path.dirname(AUDIT_PATH), { recursive: true })
-    await fs.appendFile(AUDIT_PATH, `${new Date().toISOString()} ${line}\n`)
+    // One call, one line. Window titles reach this verbatim through several
+    // call sites, and a title is whatever a page says it is -- newlines
+    // included. A crafted title turned one entry into three, one of which read
+    // like a lease auto-approving rm -rf. No capability is gained by that; the
+    // record is, which is the only thing this file is for.
+    const flat = line.replace(/[\r\n]+/g, " ⏎ ")
+    await fs.appendFile(AUDIT_PATH, `${new Date().toISOString()} ${flat}\n`)
   } catch {
     /* auditing must never block or fail an action */
   }
@@ -849,15 +874,46 @@ type Decision = { action: Action; reasons: string[]; subject: string }
 /** Thrown when the policy says no. Carries a fully-explained message. */
 class Refused extends Error {}
 
-const windowSubjects = (w: Win) => [
-  `class:${w.class}`,
-  `initialclass:${w.initialClass ?? ""}`,
-  `title:${w.title}`,
-  `initialtitle:${w.initialTitle ?? ""}`,
-  `pid:${w.pid}`,
-  w.class,
-  w.title,
-]
+/**
+ * The strings an app rule is matched against.
+ *
+ * class, initialClass, title and initialTitle are all chosen by the process
+ * being judged: class is a command-line flag, title is document.title for
+ * anything in a browser. So the policy asks the subject for its credentials
+ * and believes them. Demonstrated on a real window: `foot --app-id=agent-browser`
+ * matched `class:agent-browser` -> input allow, where the same binary as
+ * `foot` matched `class:foot` -> input deny. That deny is the rule that stops
+ * an agent typing shell commands into a terminal.
+ *
+ * `exe:` fixes the identity to the binary behind the pid, read from /proc,
+ * which the process cannot rename for itself. The claimed names stay -- they
+ * are convenient and usually honest -- but a rule can now be written against
+ * something that is true.
+ */
+const exeCache = new Map<number, string>()
+function exeOf(pid: number): string {
+  const hit = exeCache.get(pid)
+  if (hit !== undefined) return hit
+  let exe = ""
+  try { exe = require("node:fs").readlinkSync(`/proc/${pid}/exe`) } catch {}
+  exeCache.set(pid, exe)
+  return exe
+}
+
+const windowSubjects = (w: Win) => {
+  const exe = exeOf(w.pid)
+  return [
+    `class:${w.class}`,
+    `initialclass:${w.initialClass ?? ""}`,
+    `title:${w.title}`,
+    `initialtitle:${w.initialTitle ?? ""}`,
+    `pid:${w.pid}`,
+    // Not chosen by the window.
+    ...(exe ? [`exe:${exe}`, `exe:${path.basename(exe)}`] : []),
+    w.class,
+    w.title,
+  ]
+}
 
 const workspaceSubjects = (ws: { id: number; name: string }) => [ws.name, `id:${ws.id}`, `name:${ws.name}`]
 
@@ -1075,7 +1131,25 @@ async function backupFile(policy: Policy, abs: string): Promise<string | undefin
  * rule. "desktop-agent remind" is unaffected: the voice route spawns it
  * directly and never passes through this tool.
  */
-const SELF_CONTROL = new Set(["desktop-agent", "desktop-agent-config", "desktop-yolo", "desktop-agent-arm"])
+const SELF_CONTROL = new Set([
+  "desktop-agent", "desktop-agent-config", "desktop-yolo", "desktop-agent-arm",
+  // The shell's own CLIs, which reach the same switches by a different road.
+  //
+  // `qs ipc call <target> yolo 240` grants a full-access lease, and
+  // toggleKillswitch operates the emergency stop -- neither takes a credential,
+  // because Quickshell's boundary is the Unix user and the agent IS that user.
+  // Reproduced from an ordinary shell with nothing but the binary.
+  //
+  // These were denied in run.commands and nowhere else, which is precisely the
+  // arrangement the entries above exist to reject: a rule in the file being
+  // protected is not a boundary. A policy carrying "*": "allow", or one written
+  // before that deny existed, hands the capability straight back.
+  //
+  // hyprctl is here for the same reason -- it dispatches to the compositor,
+  // which is how every window rule is enforced -- and omarchy because it is a
+  // router over both.
+  "qs", "quickshell", "hyprctl", "omarchy",
+])
 
 const NEVER_YOLO: string[] = [
   // Destroy or overwrite what is already on disk.
@@ -3327,6 +3401,42 @@ server.registerTool(
  * in the same audit log, raises the same overlay, stops at the same kill switch,
  * and is promoted by the same lease. There is no second permission system here.
  */
+/**
+ * Write, refusing to follow a symlink at the final component.
+ *
+ * realPath() resolves before the policy is checked, and openForWrite gates on
+ * the resolved path -- so the check is honest about what it looked at. What it
+ * cannot cover is the gap afterwards: between the check and the write, that
+ * last component can become a symlink into somewhere denied. Exploiting it
+ * needs a concurrent writer and a few milliseconds, which is why this was
+ * ranked low, but O_NOFOLLOW closes it for the price of one flag.
+ *
+ * O_NOFOLLOW only guards the FINAL component; the ancestors were resolved
+ * above. A swap higher up the path remains theoretically racy and would need
+ * openat2(RESOLVE_NO_SYMLINKS), which Bun does not expose.
+ */
+async function writeNoFollow(abs: string, content: string) {
+  const fsSync = require("node:fs")
+  let fd: number
+  try {
+    fd = fsSync.openSync(abs, fsSync.constants.O_WRONLY | fsSync.constants.O_CREAT |
+                              fsSync.constants.O_TRUNC | fsSync.constants.O_NOFOLLOW, 0o644)
+  } catch (e: any) {
+    if (e?.code === "ELOOP") {
+      throw new Refused(
+        `REFUSED: "${abs}" is a symlink, and became one after its destination was checked.\n` +
+          "  Writing through it would land somewhere the policy never saw.",
+      )
+    }
+    throw e
+  }
+  try {
+    fsSync.writeSync(fd, content, 0, "utf8")
+  } finally {
+    fsSync.closeSync(fd)
+  }
+}
+
 async function openForWrite(tool: string, rawPath: string) {
   const { policy, error } = await loadPolicy()
   if (!rawPath?.trim()) throw new Error("pass a path")
@@ -3377,7 +3487,7 @@ server.registerTool(
 
     const saved = existed ? await backupFile(policy, abs) : undefined
     await fs.mkdir(path.dirname(abs), { recursive: true })
-    await fs.writeFile(abs, content, "utf8")
+    await writeNoFollow(abs, content)
     await audit(policy, `write ${abs} -> ${existed ? "replaced" : "created"} ${bytes} bytes`)
 
     const out = [`${existed ? "Replaced" : "Created"} ${abs} (${bytes} bytes)`]
@@ -3430,7 +3540,7 @@ server.registerTool(
       }
 
       const saved = await backupFile(policy, abs)
-      await fs.writeFile(abs, after, "utf8")
+      await writeNoFollow(abs, after)
       await audit(policy, `edit ${abs} -> ${hits} replacement${hits === 1 ? "" : "s"}`)
 
       const out = [`Edited ${abs} — ${hits} replacement${hits === 1 ? "" : "s"}`]
