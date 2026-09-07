@@ -243,6 +243,12 @@ Item {
   }
 
   Text {
+      // Agent-derived strings reach these. Qt's AutoText renders anything
+      // that looks like markup AS markup, so a window title or a URL could
+      // colour itself into the background or draw text that reads like a
+      // different message. Pinned everywhere rather than per-element: the
+      // last round fixed one file and left the same data loose in eleven.
+      textFormat: Text.PlainText
     anchors.centerIn: parent
     text: root.glyph
     color: root.tone

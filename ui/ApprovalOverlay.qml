@@ -201,6 +201,12 @@ Item {
             }
 
             Text {
+                // Agent-derived strings reach these. Qt's AutoText renders anything
+                // that looks like markup AS markup, so a window title or a URL could
+                // colour itself into the background or draw text that reads like a
+                // different message. Pinned everywhere rather than per-element: the
+                // last round fixed one file and left the same data loose in eleven.
+                textFormat: Text.PlainText
               width: parent.width
               text: root.destructive ? "This cannot be undone" : "Permission needed"
               color: root.destructive ? Theme.authTextError : Theme.authText
@@ -211,6 +217,12 @@ Item {
             }
 
             Text {
+                // Agent-derived strings reach these. Qt's AutoText renders anything
+                // that looks like markup AS markup, so a window title or a URL could
+                // colour itself into the background or draw text that reads like a
+                // different message. Pinned everywhere rather than per-element: the
+                // last round fixed one file and left the same data loose in eleven.
+                textFormat: Text.PlainText
               width: parent.width
               text: root.principal === "voice"
                 ? "Asked for by something you said"
@@ -316,6 +328,12 @@ Item {
         }
 
         Text {
+            // Agent-derived strings reach these. Qt's AutoText renders anything
+            // that looks like markup AS markup, so a window title or a URL could
+            // colour itself into the background or draw text that reads like a
+            // different message. Pinned everywhere rather than per-element: the
+            // last round fixed one file and left the same data loose in eleven.
+            textFormat: Text.PlainText
           width: parent.width
           visible: root.queueDepth > 1
           text: "+" + (root.queueDepth - 1) + " more waiting"
@@ -389,6 +407,12 @@ Item {
           }
 
           Text {
+              // Agent-derived strings reach these. Qt's AutoText renders anything
+              // that looks like markup AS markup, so a window title or a URL could
+              // colour itself into the background or draw text that reads like a
+              // different message. Pinned everywhere rather than per-element: the
+              // last round fixed one file and left the same data loose in eleven.
+              textFormat: Text.PlainText
             width: parent.width
             text: root.destructive
               ? "Destructive actions are never auto-approved, lease or no lease."

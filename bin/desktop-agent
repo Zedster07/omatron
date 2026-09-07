@@ -433,6 +433,70 @@ case "${1:-doctor}" in
     for u in desktop-agent-voice desktop-agent-stt; do
       systemctl --user disable --now "$u.service" >/dev/null 2>&1 && ok "$u stopped" || true
     done
+      systemctl --user daemon-reload >/dev/null 2>&1 || true
+
+      # Disabled is not gone. The unit files stayed on disk pointing into a
+      # directory about to be deleted, so systemd carried a broken unit for as
+      # long as the machine lived.
+      for u in desktop-agent-voice desktop-agent-stt; do
+        [[ -f "$UNITS/$u.service" ]] && rm -f "$UNITS/$u.service" && ok "$u.service removed"
+      done
+      systemctl --user daemon-reload >/dev/null 2>&1 || true
+
+      # The commands this plugin symlinked into PATH. Left behind they are
+      # broken links that still shadow anything else of the same name.
+      bold "Removing commands"
+      for c in desktop-agent desktop-agent-config desktop-agent-listen desktop-yolo; do
+        l="$HOME/.local/bin/$c"
+        if [[ -L "$l" ]] && [[ "$(readlink -f "$l" 2>/dev/null)" == "$PLUGIN_DIR"* ]]; then
+          rm -f "$l" && ok "$c unlinked"
+        fi
+      done
+
+      # The MCP registrations. Every runner keeps a path into this directory,
+      # so once it is deleted each one fails at startup loading a server that
+      # is not there -- which reads as the CLI being broken, not as leftovers.
+      bold "Removing MCP registrations"
+      DA_PLUGIN_DIR="$PLUGIN_DIR" python3 - <<'PYEOF'
+import json, os
+plugin = os.environ["DA_PLUGIN_DIR"]
+home = os.path.expanduser("~")
+
+def drop_json(path, key):
+    try:
+        d = json.load(open(path))
+    except Exception:
+        return
+    servers = d.get(key)
+    if not isinstance(servers, dict) or "desktop" not in servers:
+        return
+    # Only ours. A desktop entry pointing somewhere else is somebody's own.
+    if plugin not in json.dumps(servers["desktop"]):
+        print(f"  ! {path}: desktop entry points elsewhere, left alone")
+        return
+    del servers["desktop"]
+    json.dump(d, open(path, "w"), indent=2)
+    print(f"  ok {path}")
+
+drop_json(f"{home}/.claude.json", "mcpServers")
+drop_json(f"{home}/.gemini/settings.json", "mcpServers")
+drop_json(f"{home}/.config/opencode/opencode.json", "mcp")
+
+toml = f"{home}/.codex/config.toml"
+try:
+    lines = open(toml).read().split("\n")
+except OSError:
+    lines = None
+if lines and any(l.strip() == "[mcp_servers.desktop]" for l in lines):
+    i = next(k for k, l in enumerate(lines) if l.strip() == "[mcp_servers.desktop]")
+    end = next((k for k in range(i + 1, len(lines)) if lines[k].lstrip().startswith("[")), len(lines))
+    if plugin in "\n".join(lines[i:end]):
+        del lines[i:end]
+        open(toml, "w").write("\n".join(lines))
+        print(f"  ok {toml}")
+    else:
+        print(f"  ! {toml}: points elsewhere, left alone")
+PYEOF
     # The keybindings are the one thing that leaves the machine WORSE than it
     # was found. Everything else this plugin adds simply stops; the unbind
     # lines keep working after the plugin is gone, so F9 does nothing and the

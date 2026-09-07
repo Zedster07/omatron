@@ -226,6 +226,12 @@ Item {
           HudFrame { anchors.fill: parent; color: root.tone; armRatio: 0.06 }
 
           Text {
+              // Agent-derived strings reach these. Qt's AutoText renders anything
+              // that looks like markup AS markup, so a window title or a URL could
+              // colour itself into the background or draw text that reads like a
+              // different message. Pinned everywhere rather than per-element: the
+              // last round fixed one file and left the same data loose in eleven.
+              textFormat: Text.PlainText
             id: transcriptText
             anchors.centerIn: parent
             width: parent.width - Style.spacing.huge * 2
@@ -326,6 +332,12 @@ Item {
           // What it is actually doing, or what went wrong. One line: this is a
           // glance, not a transcript.
           Text {
+              // Agent-derived strings reach these. Qt's AutoText renders anything
+              // that looks like markup AS markup, so a window title or a URL could
+              // colour itself into the background or draw text that reads like a
+              // different message. Pinned everywhere rather than per-element: the
+              // last round fixed one file and left the same data loose in eleven.
+              textFormat: Text.PlainText
             visible: text !== ""
             width: Math.min(implicitWidth, Style.space(420))
             // Live action first. matchedIntent is the reason the run STARTED
@@ -373,6 +385,12 @@ Item {
             spacing: Style.spacing.sm
 
             Text {
+                // Agent-derived strings reach these. Qt's AutoText renders anything
+                // that looks like markup AS markup, so a window title or a URL could
+                // colour itself into the background or draw text that reads like a
+                // different message. Pinned everywhere rather than per-element: the
+                // last round fixed one file and left the same data loose in eleven.
+                textFormat: Text.PlainText
               anchors.verticalCenter: parent.verticalCenter
               text: "\u{f04d}"
               color: Theme.danger
@@ -380,6 +398,12 @@ Item {
               font.pixelSize: Style.font.caption
             }
             Text {
+                // Agent-derived strings reach these. Qt's AutoText renders anything
+                // that looks like markup AS markup, so a window title or a URL could
+                // colour itself into the background or draw text that reads like a
+                // different message. Pinned everywhere rather than per-element: the
+                // last round fixed one file and left the same data loose in eleven.
+                textFormat: Text.PlainText
               anchors.verticalCenter: parent.verticalCenter
               text: "stop"
               color: Theme.danger

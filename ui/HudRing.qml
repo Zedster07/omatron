@@ -88,6 +88,12 @@ Item {
     spacing: 0
 
     Text {
+        // Agent-derived strings reach these. Qt's AutoText renders anything
+        // that looks like markup AS markup, so a window title or a URL could
+        // colour itself into the background or draw text that reads like a
+        // different message. Pinned everywhere rather than per-element: the
+        // last round fixed one file and left the same data loose in eleven.
+        textFormat: Text.PlainText
       anchors.horizontalCenter: parent.horizontalCenter
       text: root.label
       color: root.color
@@ -98,6 +104,12 @@ Item {
     }
 
     Text {
+        // Agent-derived strings reach these. Qt's AutoText renders anything
+        // that looks like markup AS markup, so a window title or a URL could
+        // colour itself into the background or draw text that reads like a
+        // different message. Pinned everywhere rather than per-element: the
+        // last round fixed one file and left the same data loose in eleven.
+        textFormat: Text.PlainText
       anchors.horizontalCenter: parent.horizontalCenter
       text: root.sublabel
       color: Util.alpha(root.color, 0.55)

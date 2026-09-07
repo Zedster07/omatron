@@ -654,6 +654,12 @@ Panel {
                             spacing: Style.spacing.xxl
 
                             Text {
+                                // Agent-derived strings reach these. Qt's AutoText renders anything
+                                // that looks like markup AS markup, so a window title or a URL could
+                                // colour itself into the background or draw text that reads like a
+                                // different message. Pinned everywhere rather than per-element: the
+                                // last round fixed one file and left the same data loose in eleven.
+                                textFormat: Text.PlainText
                                 anchors.verticalCenter: parent.verticalCenter
                                 text: root.glyph
                                 color: root.tone
@@ -671,6 +677,12 @@ Panel {
                                     tone: Color.foreground
                                 }
                                 Text {
+                                    // Agent-derived strings reach these. Qt's AutoText renders anything
+                                    // that looks like markup AS markup, so a window title or a URL could
+                                    // colour itself into the background or draw text that reads like a
+                                    // different message. Pinned everywhere rather than per-element: the
+                                    // last round fixed one file and left the same data loose in eleven.
+                                    textFormat: Text.PlainText
                                     width: parent.width
                                     text: root.statusLine
                                     color: root.tone
@@ -740,6 +752,12 @@ Panel {
                                             anchors.horizontalCenter: parent.horizontalCenter
                                         }
                                         Text {
+                                            // Agent-derived strings reach these. Qt's AutoText renders anything
+                                            // that looks like markup AS markup, so a window title or a URL could
+                                            // colour itself into the background or draw text that reads like a
+                                            // different message. Pinned everywhere rather than per-element: the
+                                            // last round fixed one file and left the same data loose in eleven.
+                                            textFormat: Text.PlainText
                                             anchors.horizontalCenter: parent.horizontalCenter
                                             text: modelData.v
                                             color: modelData.ok ? Color.foreground : Theme.danger
@@ -768,6 +786,12 @@ Panel {
                                 color: root.yoloActive ? Theme.caution : Util.alpha(Color.foreground, 0.45)
                             }
                             Text {
+                                // Agent-derived strings reach these. Qt's AutoText renders anything
+                                // that looks like markup AS markup, so a window title or a URL could
+                                // colour itself into the background or draw text that reads like a
+                                // different message. Pinned everywhere rather than per-element: the
+                                // last round fixed one file and left the same data loose in eleven.
+                                textFormat: Text.PlainText
                                 width: parent.width
                                 wrapMode: Text.WordWrap
                                 text: !root.yoloActive ? "Skip approvals for a while. Never overrides a denial, and never auto-runs rm, dd, chmod, kill, systemctl or a package manager." : root.yoloAllowed ? "Approvals are being granted without asking. Destructive commands and anything denied still stop." : "A lease is running, but nothing is acting on it."
@@ -796,6 +820,12 @@ Panel {
                             // 57:02 left" while every action still stops for approval is the
                             // most misleading thing this panel can display.
                             Text {
+                                // Agent-derived strings reach these. Qt's AutoText renders anything
+                                // that looks like markup AS markup, so a window title or a URL could
+                                // colour itself into the background or draw text that reads like a
+                                // different message. Pinned everywhere rather than per-element: the
+                                // last round fixed one file and left the same data loose in eleven.
+                                textFormat: Text.PlainText
                                 visible: !root.yoloAllowed && root.policyEnabled && root.policyMaster
                                 width: parent.width
                                 wrapMode: Text.WordWrap
@@ -829,6 +859,12 @@ Panel {
                             }
 
                             Text {
+                                // Agent-derived strings reach these. Qt's AutoText renders anything
+                                // that looks like markup AS markup, so a window title or a URL could
+                                // colour itself into the background or draw text that reads like a
+                                // different message. Pinned everywhere rather than per-element: the
+                                // last round fixed one file and left the same data loose in eleven.
+                                textFormat: Text.PlainText
                                 visible: root.jobs.length === 0
                                 width: parent.width
                                 wrapMode: Text.WordWrap
@@ -862,6 +898,12 @@ Panel {
                                             color: modelData.kind === "task" ? Theme.caution : Util.alpha(Color.foreground, 0.45)
                                         }
                                         Text {
+                                            // Agent-derived strings reach these. Qt's AutoText renders anything
+                                            // that looks like markup AS markup, so a window title or a URL could
+                                            // colour itself into the background or draw text that reads like a
+                                            // different message. Pinned everywhere rather than per-element: the
+                                            // last round fixed one file and left the same data loose in eleven.
+                                            textFormat: Text.PlainText
                                             anchors.left: jobKind.right
                                             anchors.leftMargin: Style.spacing.md
                                             anchors.right: jobCancel.left
@@ -891,6 +933,12 @@ Panel {
                                     }
 
                                     Text {
+                                        // Agent-derived strings reach these. Qt's AutoText renders anything
+                                        // that looks like markup AS markup, so a window title or a URL could
+                                        // colour itself into the background or draw text that reads like a
+                                        // different message. Pinned everywhere rather than per-element: the
+                                        // last round fixed one file and left the same data loose in eleven.
+                                        textFormat: Text.PlainText
                                         width: parent.width
                                         text: (modelData.recurrent ? "repeats " : "once ") + modelData.when + (modelData.capabilities && modelData.capabilities.length ? "  ·  may " + modelData.capabilities.join(", ") : "")
                                         color: Util.alpha(Color.foreground, 0.5)
@@ -959,6 +1007,12 @@ Panel {
                                 }
 
                                 Text {
+                                    // Agent-derived strings reach these. Qt's AutoText renders anything
+                                    // that looks like markup AS markup, so a window title or a URL could
+                                    // colour itself into the background or draw text that reads like a
+                                    // different message. Pinned everywhere rather than per-element: the
+                                    // last round fixed one file and left the same data loose in eleven.
+                                    textFormat: Text.PlainText
                                     width: parent.width
                                     wrapMode: Text.WordWrap
                                     color: Util.alpha(Color.foreground, 0.8)
@@ -978,6 +1032,12 @@ Panel {
                                 }
 
                                 Text {
+                                    // Agent-derived strings reach these. Qt's AutoText renders anything
+                                    // that looks like markup AS markup, so a window title or a URL could
+                                    // colour itself into the background or draw text that reads like a
+                                    // different message. Pinned everywhere rather than per-element: the
+                                    // last round fixed one file and left the same data loose in eleven.
+                                    textFormat: Text.PlainText
                                     width: parent.width
                                     wrapMode: Text.WordWrap
                                     visible: root.installLine !== ""
@@ -1157,6 +1217,12 @@ Panel {
                         // then wonder why a request that needs the screen came
                         // back as "I cannot do that".
                         Text {
+                            // Agent-derived strings reach these. Qt's AutoText renders anything
+                            // that looks like markup AS markup, so a window title or a URL could
+                            // colour itself into the background or draw text that reads like a
+                            // different message. Pinned everywhere rather than per-element: the
+                            // last round fixed one file and left the same data loose in eleven.
+                            textFormat: Text.PlainText
                             width: parent.width
                             wrapMode: Text.WordWrap
                             text: "Registered phrases answer instantly. Anything else goes to an AI that either picks a ready-made command or writes one for your approval — and if it needs to see and click the screen, an agent takes it, under your policy."
@@ -1284,6 +1350,12 @@ Panel {
                             border.color: Util.alpha(Theme.danger, 0.5)
 
                             Text {
+                                // Agent-derived strings reach these. Qt's AutoText renders anything
+                                // that looks like markup AS markup, so a window title or a URL could
+                                // colour itself into the background or draw text that reads like a
+                                // different message. Pinned everywhere rather than per-element: the
+                                // last round fixed one file and left the same data loose in eleven.
+                                textFormat: Text.PlainText
                                 id: writeErrText
                                 anchors.left: parent.left
                                 anchors.right: parent.right
@@ -1381,6 +1453,12 @@ Panel {
                             }
 
                             Text {
+                                // Agent-derived strings reach these. Qt's AutoText renders anything
+                                // that looks like markup AS markup, so a window title or a URL could
+                                // colour itself into the background or draw text that reads like a
+                                // different message. Pinned everywhere rather than per-element: the
+                                // last round fixed one file and left the same data loose in eleven.
+                                textFormat: Text.PlainText
                                 width: parent.width
                                 wrapMode: Text.WordWrap
                                 text: "Checked before anything else, ignoring what the target is. \"Ask\" raises the approval overlay; a full-access lease turns those into silent yes for as long as it runs."
@@ -1468,6 +1546,12 @@ Panel {
                                         spacing: Style.spacing.xxs
 
                                         Text {
+                                            // Agent-derived strings reach these. Qt's AutoText renders anything
+                                            // that looks like markup AS markup, so a window title or a URL could
+                                            // colour itself into the background or draw text that reads like a
+                                            // different message. Pinned everywhere rather than per-element: the
+                                            // last round fixed one file and left the same data loose in eleven.
+                                            textFormat: Text.PlainText
                                             text: modelData.k
                                             color: Color.foreground
                                             font.family: root.fontFamily
@@ -1475,6 +1559,12 @@ Panel {
                                             font.bold: true
                                         }
                                         Text {
+                                            // Agent-derived strings reach these. Qt's AutoText renders anything
+                                            // that looks like markup AS markup, so a window title or a URL could
+                                            // colour itself into the background or draw text that reads like a
+                                            // different message. Pinned everywhere rather than per-element: the
+                                            // last round fixed one file and left the same data loose in eleven.
+                                            textFormat: Text.PlainText
                                             width: parent.width
                                             text: modelData.d
                                             wrapMode: Text.WordWrap

@@ -901,52 +901,43 @@ function exeOf(pid: number): string {
 }
 
 /**
- * Launch arguments that change WHICH program this is, rather than what it opens.
+ * What a launched application may be told to open: a place, never a setting.
  *
- * desktop_launch built its command by concatenation -- entry.command plus
- * whatever the caller passed -- and the shipped policy sets "args": true on the
- * browser so it can open at a URL. Chromium picks its profile from a flag, so
- * that also permitted:
+ * This was a deny-list of Chromium flags, and it lasted one audit round. The
+ * bypass was not an exotic flag -- it was the SAME flag with one dash:
+ * Chromium's parser accepts "-user-data-dir=" as readily as "--user-data-dir=",
+ * and `LAUNCH_FORBIDDEN.includes(flag)` did not. Verified against the binary:
+ * `chromium -user-data-dir=/tmp/x` created the profile.
  *
- *   desktop_launch browser --user-data-dir=~/.config/chromium
+ * The lesson is not "add the other prefix". A deny-list has to anticipate every
+ * spelling of every switch in a program with hundreds of them, and it fails
+ * silently and completely the first time it does not. So this is an allow-list
+ * of shapes instead, and the shape is the one the policy comment already
+ * describes: "args: true so it can open straight at a path it already located".
  *
- * which opens the person's real, fully logged-in browser. The agent then needs
- * no browser tool at all: the result is an ordinary window of class chromium,
- * which the app rules match with "*": "allow", so screenshot, type and key all
- * work on it. That is the entire "its own empty profile, none of your logins"
- * property -- the property that makes capabilities.browser safe to enable --
- * removed by one argument.
- *
- * Refused here rather than in the policy, for the reason SELF_CONTROL exists:
- * "args": true is a rule in the file being protected, and the person who sets
- * it is asking to pass a URL, not to re-point the profile.
- *
- * --class and --app-id are here too: a window's class is what the app rules
- * match on, so choosing it is choosing your own permissions.
+ * A URL or a path. Nothing that begins with a dash. There is no list to keep
+ * current, and a flag nobody has thought of yet is refused by construction.
  */
-const LAUNCH_FORBIDDEN = [
-  "--user-data-dir", "--profile-directory", "--disk-cache-dir",
-  "--remote-debugging-port", "--remote-debugging-pipe", "--remote-allow-origins",
-  "--load-extension", "--disable-extensions-except",
-  "--disable-web-security", "--allow-running-insecure-content",
-  "--ignore-certificate-errors", "--no-sandbox", "--disable-gpu-sandbox",
-  "--proxy-server", "--proxy-pac-url", "--host-resolver-rules",
-  "--auth-server-allowlist", "--auth-server-whitelist",
-  "--class", "--app-id", "--name",
-  "--headless",
-]
-
 function checkLaunchArgs(app: string, argv: string[]): void {
   for (const a of argv) {
-    const flag = a.split("=")[0]
-    if (LAUNCH_FORBIDDEN.includes(flag)) {
+    if (a.startsWith("-")) {
       throw new Refused(
-        `REFUSED: "${flag}" is not an argument you may pass to a launched application.\n` +
-          "  It changes which program this is rather than what it opens -- the profile it\n" +
-          "  uses, the extensions it loads, the class it reports, or whether it opens a\n" +
-          "  debugging port. Those decide what you are allowed to do with the window.\n" +
-          `  Pass a URL or a path. For a browser you control, use desktop_browser_open,\n` +
+        `REFUSED: "${a}" is an option, and a launched application takes places to open, not options.\n` +
+          "  Options decide which program this really is -- which profile it loads, which\n" +
+          "  extensions, what class it reports, whether it opens a debugging port -- and\n" +
+          "  those decide what you are then allowed to do with the window.\n" +
+          "  Pass a URL or a path. For a browser you drive, use desktop_browser_open,\n" +
           "  which starts your own profile.",
+      )
+    }
+    // A URL, or something that looks like a filesystem path. Both are places.
+    const isUrl = /^https?:\/\//i.test(a)
+    const isPath = a.startsWith("/") || a.startsWith("~/") || a.startsWith("./")
+    if (!isUrl && !isPath) {
+      throw new Refused(
+        `REFUSED: "${a}" is neither a URL nor a path.\n` +
+          `  ${app} may be told where to open, and nothing else. Give an https:// address\n` +
+          "  or an absolute path.",
       )
     }
   }
@@ -1525,7 +1516,20 @@ async function gate(
   {
     const { policy } = await loadPolicy()
     const y = await yoloState(policy)
-    if (y.active) {
+    // A lease belongs to the person who granted it, not to everything the
+    // agent then spawns.
+    //
+    // yoloState() reads a global file and knew nothing about who was asking,
+    // so a lease granted for a foreground piece of work also auto-approved
+    // every background subagent's shell commands and file writes -- silently,
+    // in parallel, and nowhere near the workflow the person had in mind when
+    // they clicked. MASTER_ONLY keeps subagents off the browser and the
+    // keyboard; it says nothing about run and write, which is most of what a
+    // delegated worker does.
+    //
+    // A subagent that hits an "ask" should stop and report it, which is what
+    // headless workers are for.
+    if (y.active && !IS_SUBAGENT) {
       if (!noYolo) {
         const left = minutesLeft(y.remainingMs)
         noteApproval(`YOLO auto-approved ${scope} — ${left} min left`)

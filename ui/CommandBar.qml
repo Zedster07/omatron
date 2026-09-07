@@ -135,6 +135,12 @@ Item {
       // A caret, not a badge. It marks where typing begins, the way a terminal
       // prompt does, and carries the state in its colour.
       Text {
+          // Agent-derived strings reach these. Qt's AutoText renders anything
+          // that looks like markup AS markup, so a window title or a URL could
+          // colour itself into the background or draw text that reads like a
+          // different message. Pinned everywhere rather than per-element: the
+          // last round fixed one file and left the same data loose in eleven.
+          textFormat: Text.PlainText
         id: caret
         anchors.left: parent.left
         anchors.leftMargin: Style.spacing.huge
@@ -172,6 +178,12 @@ Item {
         }
 
         Text {
+            // Agent-derived strings reach these. Qt's AutoText renders anything
+            // that looks like markup AS markup, so a window title or a URL could
+            // colour itself into the background or draw text that reads like a
+            // different message. Pinned everywhere rather than per-element: the
+            // last round fixed one file and left the same data loose in eleven.
+            textFormat: Text.PlainText
           anchors.verticalCenter: parent.verticalCenter
           visible: root.result !== ""
           width: Math.min(implicitWidth, stage.width * 0.4)
@@ -224,6 +236,12 @@ Item {
       }
 
       Text {
+          // Agent-derived strings reach these. Qt's AutoText renders anything
+          // that looks like markup AS markup, so a window title or a URL could
+          // colour itself into the background or draw text that reads like a
+          // different message. Pinned everywhere rather than per-element: the
+          // last round fixed one file and left the same data loose in eleven.
+          textFormat: Text.PlainText
         anchors.fill: input
         verticalAlignment: Text.AlignVCenter
         visible: input.text.length === 0 && !root.busy

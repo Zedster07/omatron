@@ -95,6 +95,12 @@ Item {
           spacing: Style.spacing.xl
 
           Text {
+              // Agent-derived strings reach these. Qt's AutoText renders anything
+              // that looks like markup AS markup, so a window title or a URL could
+              // colour itself into the background or draw text that reads like a
+              // different message. Pinned everywhere rather than per-element: the
+              // last round fixed one file and left the same data loose in eleven.
+              textFormat: Text.PlainText
             anchors.verticalCenter: parent.verticalCenter
             text: root.troubled ? "󰀪" : "󰄬"
             color: root.troubled ? Theme.danger : Theme.ok
@@ -109,6 +115,12 @@ Item {
             HudLabel { text: "run complete"; tone: Theme.cardText }
 
             Text {
+                // Agent-derived strings reach these. Qt's AutoText renders anything
+                // that looks like markup AS markup, so a window title or a URL could
+                // colour itself into the background or draw text that reads like a
+                // different message. Pinned everywhere rather than per-element: the
+                // last round fixed one file and left the same data loose in eleven.
+                textFormat: Text.PlainText
               text: "Desktop Agent finished"
               color: Theme.cardText
               font.family: Style.font.family
@@ -117,6 +129,12 @@ Item {
             }
 
             Text {
+                // Agent-derived strings reach these. Qt's AutoText renders anything
+                // that looks like markup AS markup, so a window title or a URL could
+                // colour itself into the background or draw text that reads like a
+                // different message. Pinned everywhere rather than per-element: the
+                // last round fixed one file and left the same data loose in eleven.
+                textFormat: Text.PlainText
               text: {
                 if (!root.recap) return ""
                 var bits = [root.recap.actions + (root.recap.actions === 1 ? " action" : " actions"),
@@ -141,6 +159,12 @@ Item {
           Repeater {
             model: root.recap ? root.recap.lines : []
             Text {
+                // Agent-derived strings reach these. Qt's AutoText renders anything
+                // that looks like markup AS markup, so a window title or a URL could
+                // colour itself into the background or draw text that reads like a
+                // different message. Pinned everywhere rather than per-element: the
+                // last round fixed one file and left the same data loose in eleven.
+                textFormat: Text.PlainText
               width: col.width
               text: (modelData.tone === "bad" ? "✕  " : modelData.tone === "warn" ? "!  " : "·  ") + modelData.text
               color: modelData.tone === "bad" ? Theme.danger
