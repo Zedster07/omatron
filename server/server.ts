@@ -1089,6 +1089,22 @@ const NEVER_YOLO_PATHS: string[] = [
   "*/.config/desktop-agent/*",
   "*/.claude/*",
   "*/.local/state/desktop-agent/*",
+  // The commands themselves. `desktop-agent link` puts symlinks here, and a
+  // lease that permits writing over desktop-yolo is a lease that permits
+  // replacing the lease control with a script of the agent's choosing, to run
+  // the next time a person types it.
+  "*/.local/bin/*",
+  // Where each runner records how to start the MCP server. Editing one of
+  // these changes the command line, the environment -- DESKTOP_AGENT_ROLE
+  // included -- and therefore what the next session is allowed to do.
+  //
+  // "*/.claude/*" was already here and does NOT cover ~/.claude.json: the file
+  // sits beside that directory rather than inside it, which is the kind of
+  // near-miss a glob makes easy to believe you have handled.
+  "*/.claude.json",
+  "*/.gemini/*",
+  "*/.codex/*",
+  "*/.config/opencode/*",
   // Secrets. Reading them is already possible; writing them is how you get a
   // trojanned key or a rewritten known_hosts.
   "*/.ssh/*", "*/.gnupg/*", "*/.aws/*", "*/.docker/config.json",

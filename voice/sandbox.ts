@@ -121,6 +121,20 @@ export async function startBridge(name: string, env: Record<string, string>): Pr
 export function sandboxArgv(inner: string[], opts: { socket: string; writable: string[] }): string[] {
   const argv = [
     "bwrap",
+    // Its own process namespace, not the machine's.
+    //
+    // --proc /proc without --unshare-pid mounts the HOST process table: the
+    // sandbox saw 429 processes instead of 4, could read /proc/<pid>/environ
+    // for anything running as this user -- every API key exported in a
+    // terminal or an IDE -- and could signal them, up to killing the
+    // compositor or this plugin's own daemon. A sandbox that leaves the
+    // process table shared is not isolating the thing most worth isolating.
+    //
+    // --unshare-ipc for the same reason at the SysV/shm layer, and
+    // --unshare-uts so it cannot rename the host.
+    "--unshare-pid",
+    "--unshare-ipc",
+    "--unshare-uts",
     "--ro-bind", "/", "/",
     "--dev", "/dev",
     "--proc", "/proc",

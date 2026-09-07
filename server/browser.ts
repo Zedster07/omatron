@@ -436,6 +436,25 @@ async function withCdp<T>(fn: (send: (m: string, p?: any) => Promise<any>) => Pr
  * through to stop something the agent can already do with curl. The metadata
  * endpoint is different: nothing legitimate asks for 169.254.169.254.
  */
+/**
+ * A hostname reduced to something worth comparing.
+ *
+ * Strips the brackets WHATWG puts around an IPv6 literal, and rewrites the
+ * IPv4-mapped forms (::ffff:7f00:1, ::ffff:127.0.0.1) back to the IPv4 address
+ * they actually reach, so one check covers every spelling of the same host.
+ */
+function normaliseHost(raw: string): string {
+  let h = raw.toLowerCase().replace(/^\[|\]$/g, "")
+  const mapped = h.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
+  if (mapped) {
+    const n = (parseInt(mapped[1], 16) << 16) | parseInt(mapped[2], 16)
+    h = [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join(".")
+  } else if (h.startsWith("::ffff:") && h.includes(".")) {
+    h = h.slice("::ffff:".length)
+  }
+  return h
+}
+
 function requireWebUrl(raw: string, allowLoopback = true): string {
   let u: URL
   try {
@@ -451,7 +470,20 @@ function requireWebUrl(raw: string, allowLoopback = true): string {
         "  To read a file, use the tools meant for it, where the path rules apply.",
     )
   }
-  const host = u.hostname.toLowerCase()
+  // Brackets off, and IPv4-mapped forms folded back to IPv4 before anything
+  // is compared.
+  //
+  // WHATWG keeps the brackets on an IPv6 literal, so u.hostname for
+  // http://[::1]/ is "[::1]" -- and every comparison below was against "::1",
+  // so loopback simply did not match. Worse, the dual-stack mapped forms:
+  // http://[::ffff:169.254.169.254]/ arrives as "[::ffff:a9fe:a9fe]", matches
+  // no metadata check, and Chromium connects to 169.254.169.254 anyway.
+  //
+  // Normalising first, and classifying by ADDRESS rather than by how the
+  // address was spelled, is the fix. Adding "::ffff:a9fe:" to a list of string
+  // prefixes would have been the same mistake the launch deny-list made: a
+  // guess at every spelling instead of a decision about what the thing IS.
+  const host = normaliseHost(u.hostname)
   // Link-local metadata. No browser task ever wants this, and on a cloud box
   // it hands out credentials to anyone who asks.
   if (host === "169.254.169.254" || host.startsWith("169.254.")) {
@@ -460,7 +492,7 @@ function requireWebUrl(raw: string, allowLoopback = true): string {
     )
   }
   const loopback =
-    host === "localhost" || host === "::1" || host === "0.0.0.0" ||
+    host === "localhost" || host === "::1" || host === "::" || host === "0.0.0.0" ||
     host.endsWith(".localhost") || /^127(\.\d{1,3}){3}$/.test(host)
   if (loopback && !allowLoopback) {
     throw new Error(
