@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""Find names that quietly redefine other names.
+
+Written after making the same mistake three times in one day:
+
+  * `import re` inside a function shadowed the module-level `re` for the WHOLE
+    function, breaking branches that had nothing to do with the change
+  * `def load()` inside a function did the same to the module-level load(),
+    breaking `get` and `set`
+  * `function configuredModel(provider)` in TypeScript silently replaced an
+    existing `configuredModel()`, so ollama was invoked with an empty model
+    name for anyone who had not set one
+
+None of these are type errors and none produce a warning. `bun build` compiles
+a duplicate function declaration happily, Python has no opinion at all, and the
+failure surfaces somewhere unrelated to the line that caused it. So: a check.
+
+Usage: bin/check-shadowing [paths...]   (defaults to the repo)
+Exit 1 if anything is found.
+"""
+import ast
+import pathlib
+import re
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+
+def check_python(path):
+    """Module-level names redefined inside a function, and duplicate defs."""
+    out = []
+    try:
+        tree = ast.parse(path.read_text())
+    except SyntaxError as e:
+        return [f"{path}: will not parse: {e}"]
+
+    top = set()
+    for n in tree.body:
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            top.add(n.name)
+        elif isinstance(n, (ast.Import, ast.ImportFrom)):
+            for a in n.names:
+                top.add((a.asname or a.name).split(".")[0])
+
+    for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+        for inner in ast.walk(fn):
+            if inner is fn:
+                continue
+            name, lineno = None, None
+            if isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                name, lineno = inner.name, inner.lineno
+            elif isinstance(inner, (ast.Import, ast.ImportFrom)):
+                for a in inner.names:
+                    nm = (a.asname or a.name).split(".")[0]
+                    if nm in top:
+                        out.append(
+                            f"{path}:{inner.lineno}: `import {nm}` inside {fn.name}() shadows the "
+                            f"module-level {nm} for ALL of {fn.name}()")
+                continue
+            if name and name in top:
+                out.append(
+                    f"{path}:{lineno}: def {name}() inside {fn.name}() shadows the module-level "
+                    f"{name} for ALL of {fn.name}()")
+    return out
+
+
+TS_FN = re.compile(r"^(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*[(<]", re.M)
+
+
+def check_ts(path):
+    """Two top-level `function name` declarations: the later one silently wins."""
+    seen, out = {}, []
+    text = path.read_text()
+    for m in TS_FN.finditer(text):
+        # Top-level only: an indented match is nested and legitimately scoped.
+        if m.group(0) is not text[m.start():m.end()].lstrip():
+            pass
+        line_start = text.rfind("\n", 0, m.start()) + 1
+        if text[line_start:m.start()].strip():
+            continue
+        name = m.group(1)
+        line = text.count("\n", 0, m.start()) + 1
+        if name in seen:
+            out.append(
+                f"{path}:{line}: function {name} is declared twice (also line {seen[name]}); "
+                f"the later declaration wins and the earlier one is never called")
+        else:
+            seen[name] = line
+    return out
+
+
+def main(argv):
+    targets = [pathlib.Path(a) for a in argv[1:]] or [ROOT]
+    files = []
+    for t in targets:
+        files.extend(t.rglob("*.py") if t.is_dir() else [t])
+        if t.is_dir():
+            files.extend(t.rglob("*.ts"))
+            files.extend(p for p in (t / "bin").glob("*") if p.is_file())
+
+    problems = []
+    for f in sorted(set(files)):
+        if any(part in (".git", "node_modules") for part in f.parts):
+            continue
+        if f.suffix == ".ts":
+            problems += check_ts(f)
+        elif f.suffix == ".py" or (f.suffix == "" and f.read_bytes()[:2] == b"#!"
+                                   and b"python" in f.read_bytes()[:40]):
+            problems += check_python(f)
+
+    for p in problems:
+        print(p)
+    print(f"\n{len(problems)} shadowing problem(s) in {len(files)} file(s)")
+    return 1 if problems else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

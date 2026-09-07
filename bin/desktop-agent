@@ -161,6 +161,16 @@ print(" ".join(sorted("mcp__desktop__" + t for t in have if "mcp__desktop__" + t
     warn "kill switch is ON — every gated action refuses"
   fi
 
+  # Cheap, and it has earned its place: three shadowing bugs in one day, none
+  # of which any compiler here would have caught.
+  if [[ -x "$PLUGIN_DIR/bin/check-shadowing" ]]; then
+    if shadow="$(python3 "$PLUGIN_DIR/bin/check-shadowing" "$PLUGIN_DIR" 2>/dev/null)" && [[ "$shadow" == *"0 shadowing"* ]]; then
+      : # nothing to say when there is nothing wrong
+    else
+      warn "shadowed names in the plugin's own source — run: $PLUGIN_DIR/bin/check-shadowing"
+    fi
+  fi
+
   echo; bold "Planning provider"
   # Installed is not the same as working.
   #
@@ -189,9 +199,20 @@ print(" ".join(sorted("mcp__desktop__" + t for t in have if "mcp__desktop__" + t
       # what actually happens rather than inventing its own patience.
       lim="$(desktop-agent-config get ai.timeoutSeconds 2>/dev/null)"
       [[ "$lim" =~ ^[0-9]+$ ]] || lim=90
-      out="$(timeout "$lim" "${probe[@]}" 2>&1)"; rc=$?
+      # Capped, and the cap is the point: a health check that sits silently for
+      # five minutes because someone set a generous timeout is a health check
+      # nobody runs twice. 30s is enough to tell "answers" from "does not", and
+      # a provider slower than that is reported as slow rather than as broken.
+      probe_lim=$(( lim < 30 ? lim : 30 ))
+      printf '  … asking %s (up to %ss)\r' "$prov" "$probe_lim"
+      out="$(timeout "$probe_lim" "${probe[@]}" 2>&1)"; rc=$?
+      printf '                                        \r'
       if [[ $rc -eq 124 ]]; then
-        bad "$prov did not answer within ${lim}s — spoken requests will time out and report nothing  (raise \"answer timeout\" in the panel's AI tab, or try: $prov)"
+        if [[ $probe_lim -lt $lim ]]; then
+          warn "$prov did not answer within ${probe_lim}s — your timeout is ${lim}s, so a spoken request would wait longer, but this is slow enough to be worth checking  (try: $prov)"
+        else
+          bad "$prov did not answer within ${lim}s — spoken requests will time out and report nothing  (raise \"answer timeout\" in the panel's AI tab, or try: $prov)"
+        fi
       elif [[ $rc -ne 0 ]]; then
         bad "$prov exits $rc: $(echo "$out" | grep -m1 . | cut -c1-100)"
       elif ! echo "$out" | grep -q '{'; then

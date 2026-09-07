@@ -372,7 +372,6 @@ def main(argv):
         # the panel had been reporting the flag while the policy said something
         # else -- so a fresh install showed "policy active" while every gated
         # action refused. Two off switches, one of them invisible.
-        import re
         path = os.path.expanduser("~/.config/desktop-agent/policy.jsonc")
         try:
             lines = open(path).read().split("\n")
@@ -432,7 +431,6 @@ def main(argv):
         # Edited line by line, not by re-serialising: policy.jsonc is a
         # commented file whose comments explain what every setting does, and
         # json.dump would silently delete all of them.
-        import re
         want = (argv[2] if len(argv) > 2 else "").lower()
         if want not in ("true", "false"):
             print("usage: desktop-agent-config policy-set-yolo true|false")
@@ -484,7 +482,7 @@ def main(argv):
         # exactly the kind of thing a panel is better at than a text editor,
         # and leaving it file-only was most of what "all configs in the panel"
         # was still missing.
-        import json as _json, re
+        import json as _json
         path = os.path.expanduser("~/.config/desktop-agent/policy.jsonc")
         try:
             lines = open(path).read().split("\n")
@@ -576,7 +574,6 @@ def main(argv):
         # cheerfully counts down "full access · 50:00 left" while every single
         # action still stops for approval -- the switch appears to work and
         # changes nothing.
-        import re
         path = os.path.expanduser("~/.config/desktop-agent/policy.jsonc")
         try:
             raw = open(path).read()
@@ -685,9 +682,6 @@ def main(argv):
     # it. Nothing about the secret ever reaches the model, which is why this
     # needs no rule relaxed anywhere.
     if cmd in ("secret-add", "secret-list", "secret-rm"):
-        # Local, because a later branch in this function does `import re`,
-        # which makes the name function-local everywhere including here.
-        import re
         store = os.path.join(os.path.dirname(CFG), "secrets.json")
 
         # Named apart from the module-level load()/save() on purpose. Defining

@@ -21,7 +21,16 @@ export interface Provider {
   timeoutMs: number
 }
 
-function configuredModel(): string {
+import { killTree } from "./killtree.ts"
+
+// Named apart from configuredModel(provider) below. They were both called
+// `configuredModel`, and a duplicate function declaration does not error in
+// JS -- the later one simply wins. So this one was never called at all:
+// OLLAMA_MODEL resolved through the two-argument version with provider
+// undefined, came back "", and ollama was invoked as
+// ["ollama","run","","--format","json",...] -- an empty model name, failing
+// instantly, for anyone without ai.model.ollama set.
+function defaultOllamaModel(): string {
   if (process.env.DESKTOP_AGENT_OLLAMA_MODEL) return process.env.DESKTOP_AGENT_OLLAMA_MODEL
   try {
     const raw = JSON.parse(
@@ -39,7 +48,7 @@ function configuredModel(): string {
   } catch {}
   return "llama3.2:3b"
 }
-const OLLAMA_MODEL = configuredModel()
+const OLLAMA_MODEL = defaultOllamaModel()
 
 /**
  * Which model a given provider should use. Empty means the CLI's own default.
@@ -198,6 +207,12 @@ export async function ask(provider: Provider, prompt: string): Promise<Answer> {
   let timedOut = false
   const timer = setTimeout(() => {
     timedOut = true
+    // The whole tree, not just the handle we hold. Every one of these CLIs is
+    // a wrapper that spawns a node or python worker, so SIGTERM to the wrapper
+    // leaves the worker running -- still holding the model, still burning the
+    // quota, and invisible because the thing we were waiting on has exited.
+    // voice/agent.ts already learned this; ask() had not.
+    try { if (proc.pid) killTree(proc.pid) } catch {}
     try { proc.kill() } catch {}
   }, limitMs)
 
