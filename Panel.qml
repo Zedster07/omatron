@@ -1162,11 +1162,21 @@ Panel {
                             label: "endpoint"
                             fontFamily: root.fontFamily
                             help: "The full URL of the transcriptions endpoint, e.g. http://localhost:8080/v1/audio/transcriptions for a local whisper.cpp server."
+                            // font.family and onAccepted, matching the key field
+                            // twenty lines below. TextField is a TextInput
+                            // wrapper: it has no fontFamily property and no
+                            // editingFinished signal, and assigning to a
+                            // property that does not exist fails the whole
+                            // component -- which fails Panel.qml, which is why
+                            // the panel stopped opening at all rather than
+                            // showing one broken row.
                             TextField {
                                 width: parent.width
                                 text: root.s("voice.remoteEndpoint", "")
-                                fontFamily: root.fontFamily
-                                onEditingFinished: root.setCfg("voice.remoteEndpoint", text.trim())
+                                placeholderText: "https://…/v1/audio/transcriptions"
+                                font.family: root.fontFamily
+                                font.pixelSize: Style.font.bodySmall
+                                onAccepted: root.setCfg("voice.remoteEndpoint", text.trim())
                             }
                         }
 
