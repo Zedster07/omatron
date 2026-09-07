@@ -212,3 +212,35 @@ hostile `subject`/`reasons` strings (a refusal message is built from a window
 title, and the overlay renders it), `voxtype` and the keybinding integration,
 the `install-local` model download path, or the plugin's behaviour when
 `policy.jsonc` is a symlink. A third pass should start there.
+
+
+---
+
+## Round 3 (external) — SEC3-05, accepted and not fixed
+
+A third audit pass found five more. Four are fixed in the commit that follows
+this note. The fifth is recorded here rather than closed:
+
+**Chromium's CDP port is unauthenticated on loopback, and the sandbox runs with
+`--share-net`.** So a sandboxed subagent can scan `127.0.0.1`, find
+`/json/version`, and drive the browser over the websocket — which bypasses
+`MASTER_ONLY`, the one boundary that says the browser belongs to the master.
+
+Confirmed: `voice/sandbox.ts:139` passes `--share-net`, and `server/browser.ts`
+launches with `--remote-debugging-port` on `127.0.0.1` with no token, because
+Chromium offers none for that transport.
+
+Not fixed, because both real remedies are larger than a patch:
+
+- `--remote-debugging-pipe` removes the socket entirely, and is the right
+  answer — but `browser.ts` speaks CDP over a WebSocket throughout, including
+  `adopt()`, which recovers a browser another session left behind by reading
+  the port out of `/proc/<pid>/cmdline`. Moving to a pipe means rewriting the
+  transport and giving up cross-session adoption.
+- Denying the sandbox loopback needs a private network namespace and a relay
+  for the outbound API calls the runners genuinely need.
+
+What limits it today: `--share-net` applies only to the sandboxed runners
+(gemini, codex, opencode), the port is random per launch, and the browser only
+exists while a master is using it. That is mitigation, not a boundary, and it
+should be written down as such rather than counted as a fix.

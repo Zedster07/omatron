@@ -335,6 +335,16 @@ def main(argv):
     # crash; both are needed.
     def _edit_policy(path, mutate):
         import fcntl, tempfile
+        # Follow the symlink before doing anything else.
+        #
+        # os.replace() swaps the inode at the path it is given, so on a policy
+        # that is a symlink -- normal for anyone keeping dotfiles in stow,
+        # chezmoi, home-manager or yadm -- it replaced the LINK with a regular
+        # file and silently broke their setup. It also fails outright with
+        # EXDEV when the link crosses a filesystem, and the lock would have been
+        # taken beside the link rather than beside the real file, so two tools
+        # editing the same policy would not have seen each other.
+        path = os.path.realpath(path)
         try:
             lock = open(path + ".lock", "a+")
         except OSError as e:

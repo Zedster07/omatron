@@ -23,7 +23,6 @@ plausible sentences.
 import json
 import os
 import tempfile
-import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get("DA_STT_PORT", "8791"))
@@ -86,50 +85,6 @@ def transcribe_local(path, prompt):
     return clean("".join(kept)), float(getattr(info, "duration", 0.0) or 0.0)
 
 
-def transcribe_remote(path, prompt, endpoint, key, remote_model):
-    """OpenAI-compatible multipart transcription (Groq, OpenAI, others)."""
-    boundary = "----desktopagent"
-    with open(path, "rb") as f:
-        audio = f.read()
-    parts = []
-
-    def field(name, value):
-        parts.append(f"--{boundary}\r\nContent-Disposition: form-data; "
-                     f'name="{name}"\r\n\r\n{value}\r\n'.encode())
-
-    field("model", remote_model)
-    field("response_format", "verbose_json")
-    field("temperature", "0")
-    if LANG:
-        field("language", LANG)
-    if prompt:
-        field("prompt", prompt)
-    parts.append(f"--{boundary}\r\nContent-Disposition: form-data; "
-                 f'name="file"; filename="a.wav"\r\n'
-                 f"Content-Type: audio/wav\r\n\r\n".encode())
-    parts.append(audio)
-    parts.append(f"\r\n--{boundary}--\r\n".encode())
-    body = b"".join(parts)
-
-    req = urllib.request.Request(
-        endpoint, data=body,
-        headers={"Authorization": f"Bearer {key}",
-                 "Content-Type": f"multipart/form-data; boundary={boundary}"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        j = json.loads(r.read())
-
-    # Use the per-segment confidence the API returns, same thresholds as local.
-    segs = j.get("segments") or []
-    if segs:
-        kept = [s.get("text", "") for s in segs
-                if s.get("no_speech_prob", 0.0) <= NO_SPEECH_MAX
-                and s.get("avg_logprob", 0.0) >= LOGPROB_MIN]
-        text = "".join(kept)
-    else:
-        text = j.get("text", "")
-    return clean(text), float(j.get("duration", 0.0) or 0.0)
-
-
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
@@ -157,22 +112,28 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"error": "no audio"})
 
         prompt = self.headers.get("X-Prompt", "") or ""
-        mode = self.headers.get("X-Mode", "local")
-        endpoint = self.headers.get("X-Endpoint", "")
-        key = self.headers.get("X-Key", "")
-        rmodel = self.headers.get("X-Remote-Model", "whisper-large-v3-turbo")
+        # This daemon transcribes locally, and only locally.
+        #
+        # It used to accept X-Mode: remote with an X-Endpoint and X-Key taken
+        # from the REQUEST, and POST the audio wherever the header said.
+        # Nothing ever asked it to: voiced.ts sends X-Mode: local and does its
+        # own remote transcription in Bun. So the branch was dead code that
+        # turned an unauthenticated loopback listener into an open POST proxy --
+        # aimable at a cloud metadata endpoint or anywhere else by any local
+        # process, including sandboxed runners, which share the host network
+        # namespace.
+        #
+        # Deleted rather than allowlisted. An unused feature does not earn a
+        # validator, and what made it dangerous was taking the destination from
+        # the caller at all.
 
         tmp = None
         try:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                 f.write(audio)
                 tmp = f.name
-            if mode == "remote" and endpoint and key:
-                text, dur = transcribe_remote(tmp, prompt, endpoint, key, rmodel)
-                used = f"remote:{rmodel}"
-            else:
-                text, dur = transcribe_local(tmp, prompt)
-                used = f"local:{MODEL}"
+            text, dur = transcribe_local(tmp, prompt)
+            used = f"local:{MODEL}"
             self._json(200, {"text": text, "duration": dur, "engine": used})
         except Exception as e:
             self._json(500, {"error": str(e)[:300]})

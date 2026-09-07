@@ -90,7 +90,10 @@ Item {
       // Measured against the screen, not the parent: the parent is this card's
       // own window now, which would be circular.
       width: Math.min(Style.space(600), parent.width - Style.gapsOut * 2)
-      height: Math.min(body.implicitHeight + Style.spacing.panelPadding * 2,
+      // Room for the footer, and never taller than the screen. body's height is
+      // no longer the whole story -- it scrolls now, and the buttons below it
+      // are what must always fit.
+      height: Math.min(body.implicitHeight + footer.implicitHeight + Style.spacing.panelPadding * 3,
                        parent.height - Style.gapsOut * 2)
       anchors.centerIn: parent
       opacity: root.revealT
@@ -143,6 +146,22 @@ Item {
         color: root.edge
         progress: root.stagger(0.0, 0.55)
       }
+
+      // Everything above the buttons scrolls.
+      //
+      // `target` is a window title or a command line and `reasons` is a list;
+      // neither has a bound. Without a scroll container the card simply grew,
+      // and what fell off the end was the row you answer with.
+      Flickable {
+        id: scrollArea
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.bottom: footer.top
+        contentHeight: body.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        interactive: contentHeight > height
 
       Column {
         id: body
@@ -219,6 +238,14 @@ Item {
 
           Text {
             width: parent.width
+            // The tool name is ours, but the rule is per-element and an exception invites
+            // the next one.
+            // Qt defaults Text.textFormat to AutoText, which renders anything that
+            // looks like markup AS markup -- so a crafted title could colour an
+            // argument into the background, or draw text that reads like a different
+            // decision than the one being asked about. This is the card someone
+            // approves from; it must show the string, not perform it.
+            textFormat: Text.PlainText
             text: root.request ? String(root.request.tool || "") : ""
             color: Theme.authText
             font.family: Style.font.family
@@ -229,6 +256,14 @@ Item {
 
           Text {
             width: parent.width
+            // This is d.subject: a window class, a window TITLE, a command line. A page
+            // sets its own title, so this string is chosen by the thing being judged.
+            // Qt defaults Text.textFormat to AutoText, which renders anything that
+            // looks like markup AS markup -- so a crafted title could colour an
+            // argument into the background, or draw text that reads like a different
+            // decision than the one being asked about. This is the card someone
+            // approves from; it must show the string, not perform it.
+            textFormat: Text.PlainText
             text: root.request ? String(root.request.target || "") : ""
             color: root.tone
             font.family: Style.font.family
@@ -263,6 +298,13 @@ Item {
 
               Text {
                 width: body.width - Style.space(3) - Style.spacing.md
+                // The reason lines, which quote the same untrusted subject back.
+                // Qt defaults Text.textFormat to AutoText, which renders anything that
+                // looks like markup AS markup -- so a crafted title could colour an
+                // argument into the background, or draw text that reads like a different
+                // decision than the one being asked about. This is the card someone
+                // approves from; it must show the string, not perform it.
+                textFormat: Text.PlainText
                 text: modelData
                 color: Theme.authTextSecondary
                 font.family: Style.font.family
@@ -283,60 +325,82 @@ Item {
           opacity: root.stagger(0.45, 0.3)
         }
 
-        // ---- actions
-        Row {
-          anchors.right: parent.right
-          spacing: Style.spacing.controlGap
-          opacity: root.stagger(0.5, 0.4)
-
-          Button {
-            text: root.urgentClock ? "Deny  " + root.remainingSec + "s" : "Deny  Esc"
-            foreground: Theme.danger
-            accent: Theme.danger
-            bordered: true
-            focusable: true
-            fontSize: Style.font.bodySmall
-            tooltipText: "Refuse this once. Silence does the same thing."
-            onClicked: root.answer("deny")
-          }
-
-          Button {
-            text: "Allow once  ⏎"
-            foreground: root.tone
-            accent: root.tone
-            bordered: true
-            focusable: true
-            fontSize: Style.font.bodySmall
-            onClicked: root.answer("allow")
-          }
-
-          // Quietest of the three on purpose: "Always" is what people reach
-          // for to make a prompt stop, so it should take the most intent.
-          Button {
-            text: "Always  A"
-            visible: !root.destructive && !root.oneOff
-            foreground: Theme.authTextSecondary
-            accent: root.tone
-            focusable: true
-            fontSize: Style.font.bodySmall
-            tooltipText: "Allow this scope until the agent's server restarts."
-            onClicked: root.answer("always")
-          }
         }
+      }
 
-        Text {
-          width: parent.width
-          text: root.destructive
-            ? "Destructive actions are never auto-approved, lease or no lease."
-            : root.oneOff
-              ? "Written for this sentence alone, so there is nothing to always-allow."
-              : "\"Always\" lasts until the server restarts. Edit the policy to make it permanent."
-          color: Theme.authTextTertiary
-          font.family: Style.font.family
-          font.pixelSize: Style.font.caption
-          wrapMode: Text.Wrap
-          opacity: root.stagger(0.55, 0.3)
-        }
+      // ---- actions, pinned
+      //
+      // Outside the scrolling region on purpose. These used to be the last
+      // children of `body`, which is anchored to the top and has no scroll
+      // container -- so a long enough `target` or `reasons` list pushed them
+      // past the bottom of the card and off the screen. The window holds an
+      // exclusive keyboard grab while it is up, so that left someone facing a
+      // prompt with no visible way to answer it, and Enter -- the natural
+      // reflex for a stuck dialog -- means allow.
+      //
+      // The card can now be as tall as it likes; the answer is always on it.
+      Column {
+        id: footer
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.margins: Style.spacing.panelPadding
+        spacing: Style.spacing.xl
+
+          // ---- actions
+          Row {
+            anchors.right: parent.right
+            spacing: Style.spacing.controlGap
+            opacity: root.stagger(0.5, 0.4)
+
+            Button {
+              text: root.urgentClock ? "Deny  " + root.remainingSec + "s" : "Deny  Esc"
+              foreground: Theme.danger
+              accent: Theme.danger
+              bordered: true
+              focusable: true
+              fontSize: Style.font.bodySmall
+              tooltipText: "Refuse this once. Silence does the same thing."
+              onClicked: root.answer("deny")
+            }
+
+            Button {
+              text: "Allow once  ⏎"
+              foreground: root.tone
+              accent: root.tone
+              bordered: true
+              focusable: true
+              fontSize: Style.font.bodySmall
+              onClicked: root.answer("allow")
+            }
+
+            // Quietest of the three on purpose: "Always" is what people reach
+            // for to make a prompt stop, so it should take the most intent.
+            Button {
+              text: "Always  A"
+              visible: !root.destructive && !root.oneOff
+              foreground: Theme.authTextSecondary
+              accent: root.tone
+              focusable: true
+              fontSize: Style.font.bodySmall
+              tooltipText: "Allow this scope until the agent's server restarts."
+              onClicked: root.answer("always")
+            }
+          }
+
+          Text {
+            width: parent.width
+            text: root.destructive
+              ? "Destructive actions are never auto-approved, lease or no lease."
+              : root.oneOff
+                ? "Written for this sentence alone, so there is nothing to always-allow."
+                : "\"Always\" lasts until the server restarts. Edit the policy to make it permanent."
+            color: Theme.authTextTertiary
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.Wrap
+            opacity: root.stagger(0.55, 0.3)
+          }
       }
     }
 
