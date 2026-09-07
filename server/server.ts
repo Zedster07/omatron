@@ -3889,10 +3889,15 @@ server.registerTool(
       render: z.boolean().optional().describe("Render afterwards and return the image. Slower; worth it to check your work."),
       start: z.enum(["empty", "default"]).optional()
         .describe('For a NEW project: "empty" (nothing) or "default" (Blender\'s cube, camera and light). Ignored if it exists.'),
+      watch: z.boolean().optional()
+        .describe(
+          "Open a Blender window on the agent's workspace showing this model, and keep it open. It reloads " +
+            "whenever you change the file, so the person watches the model take shape. Ask for it once at the " +
+            "start of a session, not on every call — it is already open after that."),
     },
   },
   guard("desktop_blender_model", async (args: {
-    project: string; ops: Array<Record<string, unknown>>; render?: boolean; start?: string
+    project: string; ops: Array<Record<string, unknown>>; render?: boolean; start?: string; watch?: boolean
   }) => {
     const { policy, error } = await loadPolicy()
     const summary = args.ops.map((o) => String(o.op ?? "?")).join(", ")
@@ -3917,12 +3922,22 @@ server.registerTool(
     }
 
     await audit(policy, `blender ${args.project}: ${summary}`)
+
+    // The window goes up AFTER the file exists, because Blender opening a
+    // path that is not there yet starts on an empty scene and then reloads
+    // into the model -- which looks like a bug the first time you see it.
+    let watching = false
+    if (args.watch) watching = await blender.openViewer(args.project, CONFINE_WS)
     const notes = [
       `${args.project} — applied ${r.applied.length} operation(s)`,
       ...r.applied.map((a) => `  ${a}`),
       "",
       blender.describeScene(r.scene),
     ]
+    if (watching) {
+      notes.push("", `A Blender window on workspace ${CONFINE_WS} is showing this model and will reload as you change it.`,
+                 "It is a viewer: it reloads from disk, so edits made in that window are lost on the next change.")
+    }
     if (r.render) {
       notes.push("", `rendered to ${r.render}`)
       try {

@@ -127,3 +127,71 @@ export function describeScene(scene: BlenderResult["scene"]): string {
   })
   return rows.join("\n")
 }
+
+const WATCH_SCRIPT = new URL("./blender_watch.py", import.meta.url).pathname
+let ruleFor = 0
+
+/**
+ * A window showing the model, on the agent's workspace, reloading as it changes.
+ *
+ * Placed by a WINDOW RULE matched on TITLE, not class. Every Blender reports
+ * class "blender", so a class rule would sweep up the person's own Blender and
+ * move it out from under them. The title carries the file path -- "ring
+ * [~/Documents/omatron-models/ring.blend] - Blender" -- so matching the models
+ * folder catches ours and nothing else.
+ */
+export async function openViewer(project: string, workspace: number): Promise<boolean> {
+  const bin = await blenderBinary()
+  if (!bin) return false
+  const file = projectPath(project)
+  try { await fs.access(file) } catch { return false }
+
+  // Already watching? Two viewers on one file would both reload correctly and
+  // the person would get two windows for no reason.
+  try {
+    const listed = Bun.spawnSync(["hyprctl", "-j", "clients"])
+    const clients = JSON.parse(new TextDecoder().decode(listed.stdout)) as any[]
+    if (clients.some((c) => c.mapped && String(c.title ?? "").includes(project + ".blend"))) return true
+  } catch {}
+
+  // setsid, so the window outlives the session that opened it.
+  //
+  // A plain spawn makes it a child of this MCP server, and an MCP server lives
+  // exactly as long as the agent session -- so the viewer vanished the moment
+  // the conversation ended, taking the thing the person was watching with it.
+  // The window is for them, not for the session.
+  const launcher = Bun.which("setsid")
+  const argv = launcher
+    ? [launcher, bin, file, "--python", WATCH_SCRIPT, "--", file]
+    : [bin, file, "--python", WATCH_SCRIPT, "--", file]
+  Bun.spawn(argv, { stdout: "ignore", stderr: "ignore", stdin: "ignore" })
+
+  // Moved once it appears, rather than placed by a window rule.
+  //
+  // A title rule looked right and did not work: Hyprland matches when the
+  // window MAPS, and Blender maps before it loads the file, so at that moment
+  // the title is just "Blender" with no path in it. The viewer landed on
+  // whatever workspace the person was on -- the exact thing this is meant to
+  // avoid. Matching on class would work at map time and would also drag the
+  // person's own Blender across, which is worse.
+  //
+  // So: wait for the window carrying this project's file, then move that one.
+  if (workspace > 0) {
+    void (async () => {
+      for (let i = 0; i < 60; i++) {
+        await new Promise((r) => setTimeout(r, 500))
+        try {
+          const listed = Bun.spawnSync(["hyprctl", "-j", "clients"])
+          const clients = JSON.parse(new TextDecoder().decode(listed.stdout)) as any[]
+          const w = clients.find((c) => c.mapped && String(c.title ?? "").includes(project + ".blend"))
+          if (!w) continue
+          if (w.workspace?.id === workspace) return
+          Bun.spawnSync(["hyprctl", "dispatch",
+            `hl.dsp.window.move({window="address:${w.address}", workspace="${workspace}", silent=true})`])
+          return
+        } catch {}
+      }
+    })()
+  }
+  return true
+}
