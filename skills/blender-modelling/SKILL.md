@@ -318,6 +318,12 @@ profile well and still renders as a lump, because a roadster with flared arches
 and an open cockpit is close to the worst case: its outlines enclose far more
 than its body. Expect a good blockout, not a finished surface.
 
+**Clear a reference you are done with** — `{op:"reference", view:"top", clear:true}`.
+Deleting the plate object does NOT clear it: the calibration lives on the scene,
+so a later loft will quietly use the previous car's top and front views while
+reporting "side+top+front" as though all three belonged together. Read that line
+in the loft's output and check it says what you expect.
+
 **Trace the drawing; do not eyeball it.** A blueprint holds the profile
 already — read the outline column by column and let it give you the station
 heights. Fitted that way an Alfa 147 reached 73% silhouette overlap

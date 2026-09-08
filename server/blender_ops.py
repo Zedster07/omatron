@@ -1063,6 +1063,25 @@ def op_reference(o):
     view = str(o.get("view", "side")).lower()
     if view not in _VIEWS:
         raise ValueError(f"view is one of {', '.join(_VIEWS)}")
+
+    # Clearing has to be possible, and deleting the plate is NOT clearing.
+    #
+    # The calibration lives on the scene, not on the empty, so removing the
+    # Reference_top object left its measurements in place -- and the next loft
+    # silently used a previous car's top and front views while reporting
+    # "side+top+front" as though all three belonged together. Every number it
+    # produced was wrong and none of them looked it.
+    if o.get("clear"):
+        for key in (f"omatron_ref_{view}", f"omatron_trace_{view}"):
+            if key in bpy.context.scene:
+                del bpy.context.scene[key]
+        old_ob = bpy.data.objects.get(f"Reference_{view}")
+        if old_ob:
+            bpy.data.objects.remove(old_ob, do_unlink=True)
+        return f"{view}: cleared"
+
+    if "image" not in o:
+        raise ValueError("give an image, or clear:true to drop this view's reference")
     path = os.path.expanduser(str(o["image"]))
     if not os.path.exists(path):
         raise ValueError(f"no such reference image: {path}")
@@ -1426,7 +1445,7 @@ def op_trace(o):
             f"cross extent {lo:.2f} to {hi:.2f} m")
 
 
-def _section_shape(samples=24, start=0.0):
+def _section_shape(samples=24, start=0.0, end=1.0):
     """Half-width as a fraction of the maximum, up the height of the car.
 
     Taken from the FRONT view, this is the actual cross-section of the body --
@@ -1438,34 +1457,48 @@ def _section_shape(samples=24, start=0.0):
     try:
         mask, cal = _reference_mask("front")
     except ValueError:
-        fallback = [(k / (samples - 1),
-                     math.sin(math.pi * (0.15 + 0.85 * k / (samples - 1))) ** 0.45)
-                    for k in range(samples)]
-        fallback[0] = (fallback[0][0], 0.0)
-        fallback[-1] = (fallback[-1][0], 0.0)
-        return fallback, False
+        lift = 1.0 / (samples + 1)
+        body = [(k / (samples - 1),
+                 math.sin(math.pi * (0.18 + 0.82 * k / (samples - 1))) ** 0.40)
+                for k in range(samples)]
+        return ([(0.0, 0.0)]
+                + [(lift + f * (1.0 - 2 * lift), w) for f, w in body]
+                + [(1.0, 0.0)]), False
 
     x0, x1, ylo, yhi = cal["px"]
     # `start` skips the bottom of the front view -- the tyres and the gap under
     # the car, which are not the body's cross-section. Without it the body is
     # as wide as the track at ground level, i.e. a slab on wheels.
-    lo_row = ylo + (yhi - ylo) * max(0.0, min(start, 0.8))
-    rows = np.linspace(lo_row + 1, yhi - 1, samples).astype("int32")
+    # `start` trims running gear off the bottom; `end` trims what is above the
+    # bodywork off the top. On this Cobra the front view's upper third is the
+    # WINDSCREEN -- narrow, and correct for the cockpit and wrong everywhere
+    # else. Applied to every station it put a narrow ridge along the bonnet and
+    # the boot, which is what turned the loft into a lumpy log.
+    span = yhi - ylo
+    lo_row = ylo + span * max(0.0, min(start, 0.8))
+    hi_row = ylo + span * max(min(end, 1.0), start + 0.1)
+    rows = np.linspace(lo_row + 1, hi_row - 1, samples).astype("int32")
     widths = []
     for r in rows:
         cols = np.where(mask[r, :])[0]
         widths.append(0.0 if not len(cols) else float(cols.max() - cols.min()) / 2.0)
     peak = max(widths) or 1.0
-    shape = [(k / (samples - 1), widths[k] / peak) for k in range(samples)]
-    # Close the section on the centreline at both ends.
+    body = [(k / (samples - 1), widths[k] / peak) for k in range(samples)]
+
+    # Close the section by ADDING centreline points, not by flattening the ones
+    # at the ends.
     #
-    # A front silhouette gives the OUTER boundary only, and its lowest and
-    # highest rows are the flat floor and the flat roof -- both a full
-    # half-width across. Lofting that leaves a half-body that never reaches
-    # y=0, so the mirror produces two detached shells with a gap down the
-    # middle. Rendered, that is not a car but a pair of torn ribbons.
-    shape[0] = (shape[0][0], 0.0)
-    shape[-1] = (shape[-1][0], 0.0)
+    # The half-body must reach y=0 or the mirror makes two detached shells --
+    # but zeroing the first and last samples throws away the true width of the
+    # floor and the roof, and a section that is a point at the bottom, wide in
+    # the middle and a point at the top is a LENS. Lofted along a car it gives
+    # a log, which is exactly what it gave. A real section is closed at the
+    # centreline AND flat across the floor: keep the measured widths, and add
+    # the two centreline points around them.
+    lift = 1.0 / (samples + 1)
+    shape = ([(0.0, 0.0)]
+             + [(lift + f * (1.0 - 2 * lift), w) for f, w in body]
+             + [(1.0, 0.0)])
     return shape, True
 
 
@@ -1486,7 +1519,8 @@ def op_loft(o):
     except ValueError:
         top, have_top = None, False
     shape, have_front = _section_shape(int(o.get("ring", 16)),
-                                       float(o.get("section_from", 0.0)))
+                                       float(o.get("section_from", 0.0)),
+                                       float(o.get("section_to", 1.0)))
 
     width = float(o.get("width", 1.72)) / 2.0     # used when there is no top view
     ring = len(shape)
