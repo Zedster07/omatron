@@ -183,11 +183,22 @@ Both are computed after normalising each outline to its own bounding box, so a
 drawing scanned at any size compares correctly against a render at any
 distance. It asks about shape, not scale.
 
+**Give the reference a real size** — `length` or `height` in metres. The plate
+is then placed with the drawing's ground line on z=0 and its centre on x=0,
+which is where you are about to build, so model and drawing overlap in the
+viewport and the overlap means something. A plate with no scale is decoration.
+
+**Read the overlay, not just the number.** `silhouette` writes one: grey where
+model and drawing agree, red where the drawing has body the model does not
+reach, blue where the model overhangs the drawing. It found in one glance
+something no number had caught — a model built mirrored, cabin left against the
+drawing's cabin right. A mirrored car has an identical bounding box, so the
+aspect-ratio check scored it a perfect fit.
+
 **Trace the drawing; do not eyeball it.** A blueprint holds the profile
 already — read the outline column by column and let it give you the station
-heights. Fitted that way, an Alfa 147 came out 0.8% off the drawing's
-proportions, against 6% for the same car built from numbers that merely
-sounded right.
+heights. Fitted that way an Alfa 147 reached 73% silhouette overlap
+with the drawing, overhanging it nowhere.
 
 And check the silhouette on the **whole** model, not part of it. A blockout
 with no wheels measured 16% out against a drawing whose outline runs down to

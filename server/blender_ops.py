@@ -436,44 +436,104 @@ def _measure(o):
             ev.to_mesh_clear()
 
     if what == "silhouette":
-        # Does the model agree with the drawing? Rendered, not guessed.
+        # Compared in WORLD SPACE, against the drawing where it actually sits.
+        #
+        # The first version normalised each outline to its own bounding box
+        # before overlapping them. That threw away position and scale -- the
+        # two things a blueprint exists to pin down -- so a model floating
+        # above the drawing at the wrong size still scored well, and the number
+        # I led with (bounding-box aspect ratio) is one a plain rectangle
+        # scores perfectly on. Both masks are now sampled on the same world
+        # window, so overlap means "is the model where the drawing says".
         import numpy as np
         view = str(o.get("view", "side")).lower()
         if view not in _VIEWS:
             raise ValueError(f"view is one of {', '.join(_VIEWS)}")
-        ref_path = o.get("reference") or bpy.context.scene.get(f"omatron_ref_{view}")
-        if not ref_path:
+        raw = bpy.context.scene.get(f"omatron_ref_{view}")
+        if not raw:
             raise ValueError(
-                f"no {view} reference. Attach one first: "
-                f'{{"op":"reference","view":"{view}","image":"/path/to/blueprint.png"}}')
+                f"no {view} reference. Attach one first, with its real size: "
+                f'{{"op":"reference","view":"{view}","image":"...","length":4.17}}')
+        try:
+            cal = json.loads(raw)
+        except (TypeError, ValueError):
+            raise ValueError(
+                "this model carries a reference from an older, uncalibrated version. "
+                "Attach it again with a length or height so it has a scale.")
+
+        grid = int(o.get("resolution", 384))
+        mpp, (x0, x1, ylo, yhi), (iw, ih) = cal["mpp"], cal["px"], cal["size"]
+
+        # The drawing, in world units: centred on x=0, ground line on z=0.
+        cx = (x0 + x1) / 2.0
+        ref_x = (-(cx - x0) * mpp, (x1 - cx) * mpp)
+        ref_z = (0.0, (yhi - ylo) * mpp)
+
+        lo, hi = None, None
+        dg = bpy.context.evaluated_depsgraph_get()
+        for ob in bpy.data.objects:
+            if ob.type != "MESH" or ob.hide_render:
+                continue
+            a, b = _bounds(ob, dg)
+            lo = a if lo is None else [min(lo[i], a[i]) for i in range(3)]
+            hi = b if hi is None else [max(hi[i], b[i]) for i in range(3)]
+        if lo is None:
+            raise ValueError("nothing to compare")
+
+        # One window covering both, so neither is cropped and neither is moved.
+        wx = (min(ref_x[0], lo[0]), max(ref_x[1], hi[0]))
+        wz = (min(ref_z[0], lo[2]), max(ref_z[1], hi[2]))
+        span = max(wx[1] - wx[0], wz[1] - wz[0]) * 1.08
+        mid = ((wx[0] + wx[1]) / 2.0, (wz[0] + wz[1]) / 2.0)
 
         shot = os.path.expanduser(str(o.get("to") or f"/tmp/omatron-cmp-{view}.png"))
-        _render_ortho(view, shot, int(o.get("resolution", 400)))
+        _render_ortho(view, shot, grid, frame=(mid, span))
 
-        mine = bpy.data.images.load(shot, check_existing=False)
-        theirs = bpy.data.images.load(os.path.expanduser(str(ref_path)), check_existing=False)
+        mine_img = bpy.data.images.load(shot, check_existing=False)
+        ref_img = bpy.data.images.load(os.path.expanduser(cal["path"]), check_existing=False)
         try:
-            a = _normalised(_mask_from_pixels(mine.pixels[:], *mine.size))
-            b = _normalised(_mask_from_pixels(theirs.pixels[:], *theirs.size))
+            mine = _mask_from_pixels(mine_img.pixels[:], *mine_img.size)
+            ref_full = _fill_holes(_mask_from_pixels(ref_img.pixels[:], *ref_img.size))
         finally:
-            bpy.data.images.remove(mine)
-            bpy.data.images.remove(theirs)
-        if a is None or b is None:
-            raise ValueError("one of the two images is blank -- nothing to compare")
+            bpy.data.images.remove(mine_img)
+            bpy.data.images.remove(ref_img)
 
-        (ma, sa), (mb, sb) = a, b
-        inter = int((ma & mb).sum())
-        union = int((ma | mb).sum())
-        # Aspect is reported separately because it is the honest number for a
-        # LINE-ART blueprint, where overlap is meaningless -- an outline drawing
-        # has almost no filled area to overlap with a solid render. Overlap is
-        # the number to trust when the reference is a filled silhouette.
-        ar_mine, ar_ref = sa[0] / max(sa[1], 1), sb[0] / max(sb[1], 1)
+        # Sample the drawing onto that same window, pixel for pixel.
+        gx = np.linspace(mid[0] - span / 2, mid[0] + span / 2, grid)
+        gz = np.linspace(mid[1] - span / 2, mid[1] + span / 2, grid)
+        px_x = np.clip(np.round(cx + gx / mpp).astype("int32"), 0, iw - 1)
+        px_y = np.clip(np.round(ylo + gz / mpp).astype("int32"), 0, ih - 1)
+        ref = ref_full[np.ix_(px_y, px_x)]
+
+        # An overlay, because "31% of the drawing is uncovered" does not say
+        # WHERE. Red is drawing the model does not reach, blue is model outside
+        # the drawing, grey is agreement. One glance replaces a paragraph.
+        overlay = os.path.expanduser(str(o.get("overlay") or shot.replace(".png", "-overlay.png")))
+        try:
+            rgba = np.zeros((grid, grid, 4), dtype="float32")
+            rgba[..., 3] = 1.0
+            both, only_m, only_r = mine & ref, mine & ~ref, ref & ~mine
+            rgba[both] = (0.62, 0.64, 0.66, 1.0)
+            rgba[only_r] = (0.85, 0.16, 0.16, 1.0)    # drawing, unfilled
+            rgba[only_m] = (0.18, 0.42, 0.90, 1.0)    # model, overhanging
+            out = bpy.data.images.new("omatron_overlay", grid, grid, alpha=True)
+            out.pixels = rgba.reshape(-1)
+            out.filepath_raw = overlay
+            out.file_format = "PNG"
+            out.save()
+            bpy.data.images.remove(out)
+        except Exception:
+            overlay = None
+
+        inter, union = int((mine & ref).sum()), int((mine | ref).sum())
+        only_mine, only_ref = int((mine & ~ref).sum()), int((ref & ~mine).sum())
         return {"what": "silhouette", "view": view,
                 "overlap": round(inter / union, 4) if union else 0.0,
-                "aspect": round(ar_mine, 4), "reference_aspect": round(ar_ref, 4),
-                "aspect_error": round(abs(ar_mine - ar_ref) / max(ar_ref, 1e-6), 4),
-                "rendered": shot}
+                "model_outside_drawing": round(only_mine / max(union, 1), 4),
+                "drawing_uncovered": round(only_ref / max(union, 1), 4),
+                "model_size": [round(hi[0] - lo[0], 3), round(hi[2] - lo[2], 3)],
+                "drawing_size": [round(ref_x[1] - ref_x[0], 3), round(ref_z[1] - ref_z[0], 3)],
+                "rendered": shot, "overlay": overlay}
 
     if what == "selection":
         # What a select actually caught. Guessing at a region and then
@@ -538,13 +598,13 @@ def op_assert(o):
     elif what == "silhouette":
         if "min_overlap" in o and m["overlap"] < float(o["min_overlap"]):
             raise ValueError(
-                f"{m['view']} silhouette overlaps the reference {int(m['overlap'] * 100)}%, "
-                f"below {int(float(o['min_overlap']) * 100)}% -- see {m['rendered']}")
-        if "max_aspect_error" in o and m["aspect_error"] > float(o["max_aspect_error"]):
-            raise ValueError(
-                f"{m['view']} view is {m['aspect']:.3f} wide-to-tall against the reference's "
-                f"{m['reference_aspect']:.3f} ({int(m['aspect_error'] * 100)}% out) -- the "
-                "proportions do not match the drawing")
+                f"{m['view']} silhouette overlaps the drawing {int(m['overlap'] * 100)}%, "
+                f"below {int(float(o['min_overlap']) * 100)}%. "
+                f"{int(m['model_outside_drawing'] * 100)}% of the frame is model where the "
+                f"drawing has none, {int(m['drawing_uncovered'] * 100)}% is drawing the model "
+                f"does not fill. Model is {m['model_size'][0]}x{m['model_size'][1]} m against "
+                f"the drawing's {m['drawing_size'][0]}x{m['drawing_size'][1]} — see {m['rendered']}")
+
     elif what == "topology":
         for key, limit in (("ngons", "max_ngons"), ("tris", "max_tris"),
                            ("non_manifold_edges", "max_non_manifold"),
@@ -883,10 +943,18 @@ _VIEWS = {
 
 
 def op_reference(o):
-    """Attach a blueprint to a view, and show it in the viewport.
+    """Attach a blueprint, CALIBRATED, and place it where the model will be.
 
-    Stored on the scene so it survives the save: the next batch, in a new
-    Blender, still knows what this model is supposed to look like.
+    The first version put a plate of arbitrary size at the origin. It looked
+    like a reference and was not one: a rectangle floating inside the car at no
+    particular scale, aligned with nothing. A drawing you cannot lay the model
+    against is decoration.
+
+    So the caller says how long (or how tall) the drawn vehicle really is, and
+    the drawing is measured to find its own outline. From those two the scale
+    follows, and the plate is placed with the drawing's GROUND LINE on z=0 and
+    its centre on x=0 -- where the model is going to be built. Now they overlap
+    in the viewport, and the overlap means something.
     """
     view = str(o.get("view", "side")).lower()
     if view not in _VIEWS:
@@ -895,29 +963,58 @@ def op_reference(o):
     if not os.path.exists(path):
         raise ValueError(f"no such reference image: {path}")
 
-    bpy.context.scene[f"omatron_ref_{view}"] = path
+    length, height = o.get("length"), o.get("height")
+    if not length and not height:
+        raise ValueError(
+            "give the real size of the drawn vehicle: length (along the drawing's "
+            "width) or height. Without it the drawing has no scale, and a reference "
+            "with no scale cannot be compared against or laid under anything.")
 
-    # A visible plate in the viewport, so the person watching sees the drawing
-    # the model is being fitted to. Behind the model, and never rendered.
-    name = f"Reference_{view}"
-    old = bpy.data.objects.get(name)
-    if old:
-        bpy.data.objects.remove(old, do_unlink=True)
+    img = bpy.data.images.load(path, check_existing=False)
     try:
-        img = bpy.data.images.load(path, check_existing=True)
+        w, h = img.size
+        mask = _fill_holes(_mask_from_pixels(img.pixels[:], w, h))
+    finally:
+        bpy.data.images.remove(img)
+
+    import numpy as np
+    rows = np.where(mask.any(axis=1))[0]
+    cols = np.where(mask.any(axis=0))[0]
+    if not len(rows) or not len(cols):
+        raise ValueError(f"{os.path.basename(path)} has no visible outline to measure")
+    # Blender hands back pixels bottom-up; row 0 is the BOTTOM of the image.
+    x0, x1, ylo, yhi = int(cols[0]), int(cols[-1]), int(rows[0]), int(rows[-1])
+    mpp = (float(length) / (x1 - x0 + 1)) if length else (float(height) / (yhi - ylo + 1))
+
+    cal = {"path": path, "mpp": mpp, "px": [x0, x1, ylo, yhi], "size": [w, h]}
+    bpy.context.scene[f"omatron_ref_{view}"] = json.dumps(cal)
+
+    name = f"Reference_{view}"
+    old_ob = bpy.data.objects.get(name)
+    if old_ob:
+        bpy.data.objects.remove(old_ob, do_unlink=True)
+    try:
+        image = bpy.data.images.load(path, check_existing=True)
         empty = bpy.data.objects.new(name, None)
         empty.empty_display_type = "IMAGE"
-        empty.data = img
-        empty.empty_display_size = float(o.get("size", 4.0))
+        empty.data = image
+        # empty_display_size is the world span of the image's LONGER side.
+        long_px = max(w, h)
+        empty.empty_display_size = long_px * mpp
+        world_w, world_h = w * mpp, h * mpp
+        # Put the outline's centre on x=0 and its ground line on z=0.
+        cx_px = (x0 + x1) / 2.0
+        off_x = (cx_px / w - 0.5) * world_w
+        off_z = (ylo / h - 0.5) * world_h
         empty.rotation_euler = _VIEWS[view][1]
-        empty.location = _vec(o.get("at"))
+        empty.location = (-off_x, float(o.get("depth", 1.2)), -off_z)
         empty.hide_render = True
         bpy.context.scene.collection.objects.link(empty)
     except Exception:
-        # The plate is a convenience. If this Blender will not take an image
-        # empty, the reference is still recorded and still comparable.
         pass
-    return f"{view}: {os.path.basename(path)}"
+
+    return (f"{view}: {os.path.basename(path)} — outline {(x1 - x0 + 1) * mpp:.2f} x "
+            f"{(yhi - ylo + 1) * mpp:.2f} m at {mpp * 1000:.2f} mm/px")
 
 
 def _mask_from_pixels(px, w, h):
@@ -986,7 +1083,7 @@ def _normalised(mask, grid=128):
     return _fill_holes(sub[ys][:, xs]), (len(cols), len(rows))
 
 
-def _render_ortho(view, path, res=400):
+def _render_ortho(view, path, res=400, frame=None):
     """One orthographic view of the model, framed on the model, alpha only."""
     lo, hi = None, None
     dg = bpy.context.evaluated_depsgraph_get()
@@ -1001,6 +1098,14 @@ def _render_ortho(view, path, res=400):
 
     centre = [(lo[i] + hi[i]) / 2 for i in range(3)]
     span = max(hi[i] - lo[i] for i in range(3)) or 1.0
+    if frame is not None:
+        # An explicit world window, so a comparison renders the model where it
+        # actually is rather than re-centring it into the frame -- re-centring
+        # is what let a floating model score well.
+        (fx, fz), span = frame
+        wi, hi_ax = _VIEWS[view][2], _VIEWS[view][3]
+        centre = list(centre)
+        centre[wi], centre[hi_ax] = fx, fz
     direction, rot, _, _ = _VIEWS[view]
 
     cam_data = bpy.data.cameras.new("OmatronOrtho")
@@ -1239,10 +1344,20 @@ def main():
             errors.append(f"{o.get('op')}: {e}")
             break
 
+    # Read-only batches do not write the file.
+    #
+    # Every successful run used to save, so asking a model a question --
+    # measure its bounds, look at it, render a view -- rewrote the .blend. The
+    # watching viewer sees the mtime move and reverts, which means repeatedly
+    # measuring a model made its window reload over and over for no change at
+    # all. A question should not modify the thing it is asking about.
+    READONLY = {"measure", "assert", "look", "render_view"}
+    touched = any(o.get("op") not in READONLY for o in req.get("ops", []))
+
     # Saved only when every operation succeeded. A half-applied batch is worse
     # than a rejected one: the agent would be reasoning about a scene that
     # matches neither what it asked for nor what it last saw.
-    if not errors:
+    if not errors and touched:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         bpy.ops.wm.save_as_mainfile(filepath=path)
 
