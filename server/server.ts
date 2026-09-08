@@ -3889,6 +3889,11 @@ server.registerTool(
       "  shade        name, smooth true|false, angle_deg — smooth above the angle, sharp below it\n" +
       "  normals      name — recalculate outward. ALWAYS do this after building a mesh by hand;\n" +
       "               a face wound the wrong way shades as a hole\n" +
+      "  viewport     to, resolution, shading wireframe|solid|material|rendered — WHAT THE 3D VIEW\n" +
+      "               IS SHOWING, right now. Not a render: the picture a person sitting in front of\n" +
+      "               Blender sees. Only in a live session, and fast enough to use constantly\n" +
+      "  view_angle   view front|back|left|right|top|bottom|iso, ortho, frame — orbit the view.\n" +
+      "               Check a form from another side, the way a person turns the model round\n" +
       "  look         label, view staged|side|front|top — render the model AS IT STANDS, mid-batch,\n" +
       "               returned with the numbers that go with it. Use it at each decision and before\n" +
       "               anything irreversible; on failure the looks taken first still come back\n" +
@@ -3946,6 +3951,11 @@ server.registerTool(
       "               relying on modifiers or exporting; non-uniform scale shears normals\n" +
       "  delete / rename   name (rename also takes to)\n" +
       "\n" +
+      "IF A LIVE SESSION IS OPEN, USE IT LIKE AN APPLICATION. Change one thing, look at it with viewport, " +
+      "measure what you cannot see, then decide the next change. A round trip is about 20ms, so the batch " +
+      "habit — deciding forty operations up front and discovering at the end that the third was wrong — buys " +
+      "you nothing here. Orbit with view_angle when a form needs checking from another side.\n" +
+      "\n" +
       "DO NOT BUILD BLIND. Put {op:\"look\", label:\"...\"} at the points where you made a decision, and " +
       "always before a boolean, an apply_modifiers or a subdivision — the operations that destroy what you " +
       "would want to go back to. Each look returns a render AND the numbers for that moment, and looks survive " +
@@ -3986,9 +3996,10 @@ server.registerTool(
         .describe('For a NEW project: "empty" (nothing) or "default" (Blender\'s cube, camera and light). Ignored if it exists.'),
       watch: z.boolean().optional()
         .describe(
-          "Open a Blender window on the agent's workspace showing this model, and keep it open. It reloads " +
-            "whenever you change the file, so the person watches the model take shape. Ask for it once at the " +
-            "start of a session, not on every call — it is already open after that."),
+          "Open a LIVE Blender window on the agent's workspace and work inside it from then on. Every later " +
+            "call goes to that session: a measurement answers in ~20ms instead of ~1s, so you can afford to " +
+            "act, look, and decide again rather than committing to a long batch blind. The person sees the " +
+            "same window and can take the mouse. Ask for it once at the start, not on every call."),
     },
   },
   guard("desktop_blender_model", async (args: {
@@ -4045,7 +4056,7 @@ server.registerTool(
     // path that is not there yet starts on an empty scene and then reloads
     // into the model -- which looks like a bug the first time you see it.
     let watching = false
-    if (args.watch) watching = await blender.openViewer(args.project, CONFINE_WS)
+    if (args.watch) watching = (await blender.openLive(args.project, CONFINE_WS)) !== null
     const notes = [
       `${args.project} — applied ${r.applied.length} operation(s)`,
       ...r.applied.map((a) => `  ${a}`),
@@ -4053,8 +4064,10 @@ server.registerTool(
       blender.describeScene(r.scene),
     ]
     if (watching) {
-      notes.push("", `A Blender window on workspace ${CONFINE_WS} is showing this model and will reload as you change it.`,
-                 "It is a viewer: it reloads from disk, so edits made in that window are lost on the next change.")
+      notes.push("",
+        `A live Blender on workspace ${CONFINE_WS} is now holding this model, and every further call goes to ` +
+        "it. Work in small steps: change something, then viewport or measure, then decide. That loop costs " +
+        "milliseconds here, so there is no reason to guess a long batch and hope.")
     }
     if (r.render) {
       notes.push("", `rendered to ${r.render}`)

@@ -13,6 +13,7 @@
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import * as live from "./blender_live.ts"
 
 export type Checkpoint = {
   label: string
@@ -100,6 +101,12 @@ export async function run(
   request: Record<string, unknown>,
   timeoutMs = 180_000,
 ): Promise<BlenderResult> {
+  // A live session answers in milliseconds and is showing the person the same
+  // scene. If one is open for this project, it IS the project -- going around
+  // it to a headless process would edit the file underneath the window and
+  // leave the two disagreeing about what the model is.
+  if (await live.isLive(project)) return live.send(project, request, timeoutMs)
+
   const bin = await blenderBinary()
   if (!bin) {
     throw new Error(
@@ -176,6 +183,60 @@ async function closeStaleViewers(keep: string): Promise<void> {
       process.kill(Number(pid), "SIGTERM")
     } catch {}
   }
+}
+
+const LIVE_SCRIPT = new URL("./blender_live.py", import.meta.url).pathname
+
+/**
+ * Open a Blender the agent drives and the person watches -- the same window.
+ *
+ * The viewer (blender_watch.py) only ever reloaded the file; this one takes
+ * instructions. That difference matters more than it sounds: with a viewer the
+ * person watches a recording of decisions already made, and with a session
+ * they are sitting in front of the thing being worked on and can take the
+ * mouse.
+ */
+export async function openLive(project: string, workspace: number): Promise<string | null> {
+  const bin = await blenderBinary()
+  if (!bin) return null
+  await fs.mkdir(MODELS, { recursive: true })
+  const file = projectPath(project)
+  const sock = live.socketPath(project)
+  if (await live.isLive(project)) return sock
+
+  await fs.mkdir(path.dirname(sock), { recursive: true }).catch(() => {})
+  await fs.unlink(sock).catch(() => {})
+  await closeStaleViewers(project)
+
+  const launcher = Bun.which("setsid")
+  const argv = [bin, file, "--python", LIVE_SCRIPT, "--", sock, file]
+  Bun.spawn(launcher ? [launcher, ...argv] : argv,
+            { stdout: "ignore", stderr: "ignore", stdin: "ignore" })
+
+  for (let i = 0; i < 90; i++) {
+    await new Promise((r) => setTimeout(r, 400))
+    if (await live.isLive(project)) break
+  }
+  if (!(await live.isLive(project))) return null
+
+  if (workspace > 0) {
+    void (async () => {
+      for (let i = 0; i < 60; i++) {
+        await new Promise((r) => setTimeout(r, 500))
+        try {
+          const listed = Bun.spawnSync(["hyprctl", "-j", "clients"])
+          const clients = JSON.parse(new TextDecoder().decode(listed.stdout)) as any[]
+          const w = clients.find((c) => c.mapped && String(c.title ?? "").includes(project + ".blend"))
+          if (!w) continue
+          if (w.workspace?.id === workspace) return
+          Bun.spawnSync(["hyprctl", "dispatch",
+            `hl.dsp.window.move({window="address:${w.address}", workspace="${workspace}", silent=true})`])
+          return
+        } catch {}
+      }
+    })()
+  }
+  return sock
 }
 
 const WATCH_SCRIPT = new URL("./blender_watch.py", import.meta.url).pathname

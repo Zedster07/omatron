@@ -337,6 +337,37 @@ matters in those directions.
 Do that early: a silhouette shows proportion faults that a three-quarter
 render hides completely.
 
+## Use it like an application, not a letter
+
+Ask for `watch: true` once at the start and a live Blender opens. Every call
+after that goes to that session, and the difference is not a detail:
+
+    measurement, live      ~17 ms
+    change and look, live  ~100 ms
+    measurement, headless  ~955 ms   (plus startup on a heavy file)
+
+At a second a call the batch habit is forced — you decide forty operations up
+front and find out at the end that the third was wrong. At twenty milliseconds
+there is no reason to guess. Change one thing, look, decide the next thing.
+That is how a person uses Blender, and the only reason this tool did not work
+that way is that it was paying to start the program every time it had a
+question.
+
+    {op:"move", name:"Body", offset:[0,0,0.1]}
+    {op:"viewport", to:"/tmp/check.png"}      // what the 3D view shows NOW
+    {op:"view_angle", view:"front"}           // orbit, and look again
+
+`viewport` is not a render. It is the picture a person sitting in front of
+Blender is looking at, grid and gizmo and all, which is why it costs
+milliseconds and a render costs seconds. Render when you want to know how it
+will LOOK; use the viewport when you want to know what you are working on.
+
+`view_angle` orbits — front, back, left, right, top, bottom, iso. Check a form
+from another side the way a person turns a model round, rather than trusting
+one angle.
+
+And the person is sitting in front of the same window. They can take the mouse.
+
 ## Look while you work, not only at the end
 
 A batch used to be blind: apply forty operations, render once, and discover the

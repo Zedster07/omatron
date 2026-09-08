@@ -2098,6 +2098,96 @@ def op_snap(o):
     return f"{ob.name}: snapped {len(verts)} vert(s) to {mode}, furthest moved {moved:.5f} m"
 
 
+def _viewport_area():
+    """The 3D view of a window that is actually on screen, and that window."""
+    wm = getattr(bpy.context, "window_manager", None)
+    for win in (wm.windows if wm else []):
+        scr = getattr(win, "screen", None)
+        if not scr:
+            continue
+        for a in scr.areas:
+            if a.type == "VIEW_3D":
+                return win, a
+    return None, None
+
+
+def op_viewport(o):
+    """What the 3D view is actually showing, right now.
+
+    Not a render: the viewport, with its shading mode, its wireframes and its
+    current angle -- the picture a person sitting in front of Blender is
+    looking at. Rendering answers "what will this look like"; this answers
+    "what am I working on", and they are different questions. Fast, too, which
+    is what makes act-then-look affordable.
+    """
+    # The area must belong to the WINDOW being overridden. Searching
+    # bpy.data.screens finds areas from screens no window is currently showing,
+    # and the override then fails with "Area not found in screen".
+    win, area = _viewport_area()
+    if area is None:
+        raise ValueError(
+            "no 3D viewport in this session -- viewport capture needs a Blender with a "
+            "window. In a headless batch, use look instead.")
+    out = os.path.expanduser(str(o.get("to") or
+                                 os.path.join(tempfile.gettempdir(), "omatron-viewport.png")))
+    space = area.spaces[0]
+    r = bpy.context.scene.render
+    keep = (r.filepath, r.resolution_x, r.resolution_y, space.shading.type)
+    if o.get("shading"):
+        space.shading.type = str(o["shading"]).upper()   # WIREFRAME SOLID MATERIAL RENDERED
+    try:
+        res = max(240, min(int(o.get("resolution", 720)), 1600))
+        r.filepath = out
+        r.resolution_x, r.resolution_y = res, int(res * 0.7)
+        region = next(rg for rg in area.regions if rg.type == "WINDOW")
+        with bpy.context.temp_override(window=win, area=area, region=region):
+            bpy.ops.render.opengl(write_still=True, view_context=True)
+    finally:
+        (r.filepath, r.resolution_x, r.resolution_y, space.shading.type) = keep
+    return out
+
+
+def op_view_angle(o):
+    """Point the viewport somewhere. How you look around a model.
+
+    A person orbits to check a form from another side; this is that, as an
+    operation. Without it the session can only ever see the model from wherever
+    the window happened to be left.
+    """
+    _, area = _viewport_area()
+    if area is None:
+        raise ValueError("no 3D viewport in this session")
+    r3d = area.spaces[0].region_3d
+    named = {
+        "front": (math.radians(90), 0, 0), "back": (math.radians(90), 0, math.pi),
+        "right": (math.radians(90), 0, math.radians(90)),
+        "left": (math.radians(90), 0, math.radians(-90)),
+        "top": (0, 0, 0), "bottom": (math.pi, 0, 0),
+        "iso": (math.radians(60), 0, math.radians(-45)),
+    }
+    key = str(o.get("view", "iso")).lower()
+    if key not in named and "rotation_deg" not in o:
+        raise ValueError(f"view is one of {', '.join(sorted(named))}, or give rotation_deg")
+    eul = mathutils.Euler(tuple(math.radians(a) for a in _vec(o["rotation_deg"]))
+                          if "rotation_deg" in o else named[key], "XYZ")
+    r3d.view_rotation = eul.to_quaternion()
+    r3d.view_perspective = "ORTHO" if o.get("ortho") else "PERSP"
+
+    if o.get("frame", True):
+        dg = bpy.context.evaluated_depsgraph_get()
+        lo, hi = None, None
+        for ob in bpy.data.objects:
+            if not _subject(ob):
+                continue
+            a, b = _bounds(ob, dg)
+            lo = a if lo is None else [min(lo[i], a[i]) for i in range(3)]
+            hi = b if hi is None else [max(hi[i], b[i]) for i in range(3)]
+        if lo:
+            r3d.view_location = [(lo[i] + hi[i]) / 2 for i in range(3)]
+            r3d.view_distance = max(hi[i] - lo[i] for i in range(3)) * 2.0
+    return f"looking {key}"
+
+
 OPS = {
     "add": op_add,
     "mesh": op_mesh,
@@ -2105,6 +2195,8 @@ OPS = {
     "normals": op_normals,
     "studio": op_studio,
     "look": op_look,
+    "viewport": op_viewport,
+    "view_angle": op_view_angle,
     "reference": op_reference,
     "trace": op_trace,
     "loft": op_loft,
@@ -2283,4 +2375,11 @@ def main():
     }))
 
 
-main()
+# Guarded so this file can be IMPORTED as well as run.
+#
+# The live session runs inside a GUI Blender and executes the same table this
+# script does -- that sameness is the point, because it means the interactive
+# path opens no execution surface the batch path did not already have. An
+# unguarded main() made importing it impossible.
+if __name__ == "__main__":
+    main()
