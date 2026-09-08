@@ -3888,6 +3888,15 @@ server.registerTool(
       "  shade        name, smooth true|false, angle_deg — smooth above the angle, sharp below it\n" +
       "  normals      name — recalculate outward. ALWAYS do this after building a mesh by hand;\n" +
       "               a face wound the wrong way shades as a hole\n" +
+      "  select       name, plus region [x0,y0,z0,x1,y1,z1] | normal +x|-x|+y|-y|+z|-z with tol\n" +
+      "               | sharper_than degrees; elements faces|edges|both. Selection persists across\n" +
+      "               the ops below. An empty selection is an error, never a silent no-op\n" +
+      "  crease       weight 0-1 on selected edges — holds a feature line through subdivision\n" +
+      "  inset        thickness, depth — rings faces inward; leaves the inner faces selected\n" +
+      "  extrude      distance (along the selection normal) or offset [x,y,z]\n" +
+      "  bevel_edges  width, segments — chosen edges only, unlike the bevel modifier\n" +
+      "  loop_cut     cuts — support loops through the selected edges\n" +
+      "  delete_faces the selection\n" +
       "  apply_modifiers   name — bake them into the mesh, needed before booleans against the result\n" +
       "  measure      what: bounds | overlap | gap | enclosed | topology | counts — name, and with\n" +
       "  assert       the same measurements, but REQUIRED to hold; a failed assert aborts the batch unsaved\n" +

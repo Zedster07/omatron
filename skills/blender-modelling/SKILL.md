@@ -79,6 +79,45 @@ cutting four wheel arches into a car body left 38. Check after every boolean:
 
 `min_quad_ratio` is the softer version when some ngons are tolerable.
 
+## Feature lines: select, crease, subdivide
+
+A car body is defined by its creases — a beltline, a shoulder, the edge of a
+bonnet. Subdivision alone melts every one of them, which is how a lofted body
+turns into a bar of soap.
+
+    {op:"select", name:"Body", sharper_than:38, elements:"edges"}
+    {op:"crease", name:"Body", weight:1.0}
+    {op:"modifier", name:"Body", kind:"subdivide", levels:1}
+
+Creases hold the edges that should stay sharp; subdivision smooths only the
+panels between them.
+
+Recesses — grilles, lamps, vents — are `inset` then `extrude` inward. The
+inset leaves its inner faces selected, so the extrude needs no second select.
+
+    {op:"select", name:"Body", normal:"+x", tol:46, region:[...], elements:"faces"}
+    {op:"inset",   name:"Body", thickness:0.035}
+    {op:"extrude", name:"Body", distance:-0.055}
+
+Select by **position and direction**, never by index: an index means nothing if
+you did not place the vertex, and it changes the moment anything is inset. When
+a selection comes back empty the error names the filter that emptied it —
+region or normal — so read it rather than guessing which to widen.
+
+## Subdivision needs a cage dense enough to subdivide
+
+The limit this hit, recorded so it is not hit again: a body lofted from 10
+cross-sections of 5 points is 36 quads, and **36 quads is not enough geometry
+to hold a shape through subdivision**, creased or not. It over-smooths into a
+blob, and an inset on a surface that coarse crumples instead of ringing
+cleanly — the grille came out chewed rather than cut.
+
+Before reaching for subdivision or recesses, give the cage the resolution the
+form needs: more stations along the length, more points per section, and
+`loop_cut` for support loops beside the edges that must stay crisp. Resolution
+first, then creases, then detail. Detail on a coarse cage is worse than no
+detail, because it destroys the silhouette that was working.
+
 ## Measure. Do not squint at the render
 
 A picture will not tell you that a part is buried inside another one, that two

@@ -399,6 +399,20 @@ def _measure(o):
             bm.free()
             ev.to_mesh_clear()
 
+    if what == "selection":
+        # What a select actually caught. Guessing at a region and then
+        # extruding is how you get a change you did not intend.
+        import bmesh
+        ob = _obj(o["name"])
+        bm = bmesh.new()
+        try:
+            bm.from_mesh(ob.data)
+            return {"what": "selection", "name": o["name"],
+                    "faces": sum(1 for f in bm.faces if f.select),
+                    "edges": sum(1 for e in bm.edges if e.select)}
+        finally:
+            bm.free()
+
     if what == "counts":
         ob = _obj(o["name"])
         verts, faces = _world_verts(ob, dg)
@@ -517,11 +531,254 @@ def op_normals(o):
         bm.free()
 
 
+# ------------------------------------------------- selecting, and editing what
+#
+# Everything above works on whole objects: add a primitive, loft a mesh, apply
+# a modifier to all of it, boolean one against another. That is enough to
+# assemble a shape and not enough to MODEL one, because a car body is defined
+# by its creases -- a beltline, a shoulder, the edge of a bonnet -- and there
+# was no way to address a single edge to crease it.
+#
+# So: a selection, and operations on it. Selection lives in the mesh's own
+# select flags, which means it survives from one operation to the next inside a
+# batch, and each operation leaves behind the geometry it created -- inset then
+# extrude is a recess, with no second selection needed.
+
+_AXES = {"+x": (1, 0, 0), "-x": (-1, 0, 0), "+y": (0, 1, 0),
+         "-y": (0, -1, 0), "+z": (0, 0, 1), "-z": (0, 0, -1)}
+
+
+def _open(ob):
+    import bmesh
+    bm = bmesh.new()
+    bm.from_mesh(ob.data)
+    bm.verts.ensure_lookup_table()
+    bm.edges.ensure_lookup_table()
+    bm.faces.ensure_lookup_table()
+    return bm
+
+
+def _close(bm, ob):
+    bm.to_mesh(ob.data)
+    ob.data.update()
+    bm.free()
+
+
+def _selected(bm, kind):
+    seq = bm.faces if kind == "faces" else bm.edges
+    return [e for e in seq if e.select]
+
+
+def _require(sel, what, o):
+    """An empty selection is a silent no-op, and this project does not ship those.
+
+    Extruding nothing reports success and changes nothing, which is how you end
+    up trusting a batch that did half of what you asked. Same treatment as an
+    array with zero offset and a mirror about its own origin: say so, loudly,
+    and take the batch down.
+    """
+    if not sel:
+        raise ValueError(
+            f"nothing selected on {o['name']}: this would {what} zero elements. "
+            "Widen the region, raise the normal tolerance, or lower sharper_than "
+            "-- and use measure what=selection to see what a select actually caught.")
+    return sel
+
+
+def op_select(o):
+    """Choose faces and edges by where they are and which way they face.
+
+    Not by index: an index means nothing to a caller who did not build the mesh
+    vertex by vertex, and it changes the moment anything is inset or bevelled.
+    Position and direction stay meaningful across edits.
+    """
+    ob = _obj(o["name"])
+    bm = _open(ob)
+    mw = ob.matrix_world
+    nm = mw.to_3x3().inverted_safe().transposed()
+
+    faces, edges = list(bm.faces), list(bm.edges)
+    trail = [f"start {len(faces)}f/{len(edges)}e"]   # where the set died
+
+    if "region" in o:
+        r = [float(v) for v in o["region"]]
+        if len(r) != 6:
+            raise ValueError("region is [x0,y0,z0, x1,y1,z1] -- six numbers")
+        lo = [min(r[i], r[i + 3]) for i in range(3)]
+        hi = [max(r[i], r[i + 3]) for i in range(3)]
+
+        def inside(p):
+            return all(lo[i] - 1e-6 <= p[i] <= hi[i] + 1e-6 for i in range(3))
+
+        faces = [f for f in faces if inside(mw @ f.calc_center_median())]
+        edges = [e for e in edges
+                 if inside(mw @ ((e.verts[0].co + e.verts[1].co) / 2.0))]
+        trail.append(f"after region {len(faces)}f/{len(edges)}e")
+
+    if "normal" in o:
+        key = str(o["normal"]).lower()
+        if key not in _AXES:
+            raise ValueError(f"normal is one of {', '.join(sorted(_AXES))}")
+        want = mathutils.Vector(_AXES[key])
+        tol = math.radians(float(o.get("tol", 35.0)))
+        faces = [f for f in faces if (nm @ f.normal).normalized().angle(want, math.pi) <= tol]
+        keep = set(faces)
+        edges = [e for e in edges if e.link_faces and all(f in keep for f in e.link_faces)]
+        trail.append(f"after normal {len(faces)}f/{len(edges)}e")
+
+    if "sharper_than" in o:
+        lim = math.radians(float(o["sharper_than"]))
+        edges = [e for e in edges
+                 if len(e.link_faces) == 2 and e.calc_face_angle(0.0) >= lim]
+        trail.append(f"after sharper_than {len(edges)}e")
+
+    want = o.get("elements", "both")
+    for f in bm.faces:
+        f.select = False
+    for e in bm.edges:
+        e.select = False
+    if want in ("faces", "both"):
+        for f in faces:
+            f.select = True
+    if want in ("edges", "both"):
+        for e in edges:
+            e.select = True
+
+    n_f, n_e = len(faces) if want != "edges" else 0, len(edges) if want != "faces" else 0
+    _close(bm, ob)
+    if not n_f and not n_e:
+        # Say WHICH filter emptied the set. "Nothing matched" sent me tuning a
+        # region that was fine, when it was the normal tolerance that had
+        # rejected everything -- the trail makes that a glance instead of a
+        # guess.
+        dg = bpy.context.evaluated_depsgraph_get()
+        lo, hi = _bounds(ob, dg)
+        raise ValueError(
+            f"nothing on {ob.name} matched that selection: "
+            + " -> ".join(trail)
+            + f". The object spans {[round(v, 2) for v in lo]} to {[round(v, 2) for v in hi]}.")
+    return f"{ob.name}: {n_f} face(s), {n_e} edge(s)"
+
+
+def op_crease(o):
+    """Hold an edge sharp through subdivision -- how a feature line is made."""
+    ob = _obj(o["name"])
+    bm = _open(ob)
+    # The layer FIRST. Creating one reallocates the edge sequence, which
+    # invalidates every BMEdge already held -- so collecting the selection
+    # before this line hands you references that are dead by the time you
+    # assign through them ("BMesh data of type BMEdge has been removed").
+    layer = bm.edges.layers.float.get("crease") or bm.edges.layers.float.new("crease")
+    bm.edges.ensure_lookup_table()
+    sel = _require(_selected(bm, "edges"), "crease", o)
+    w = float(o.get("weight", 1.0))
+    for e in sel:
+        e[layer] = max(0.0, min(1.0, w))
+    _close(bm, ob)
+    return f"{ob.name}: creased {len(sel)} edge(s) at {w}"
+
+
+def op_inset(o):
+    """Ring a face inward. The first half of every recess, panel and lamp."""
+    import bmesh
+    ob = _obj(o["name"])
+    bm = _open(ob)
+    sel = _require(_selected(bm, "faces"), "inset", o)
+    res = bmesh.ops.inset_region(
+        bm, faces=sel, thickness=float(o.get("thickness", 0.02)),
+        depth=float(o.get("depth", 0.0)), use_even_offset=True)
+    # Leave the INNER faces selected, so extrude follows without reselecting.
+    inner = [f for f in sel]
+    for f in bm.faces:
+        f.select = False
+    for f in inner:
+        f.select = True
+    _close(bm, ob)
+    return f"{ob.name}: inset {len(sel)} face(s), {len(res.get('faces', []))} new"
+
+
+def op_extrude(o):
+    """Push selected faces out, or in. Bumpers, sills, spoilers, recesses."""
+    import bmesh
+    ob = _obj(o["name"])
+    bm = _open(ob)
+    sel = _require(_selected(bm, "faces"), "extrude", o)
+
+    if "offset" in o:
+        vec = mathutils.Vector(_vec(o["offset"]))
+    else:
+        d = float(o.get("distance", 0.05))
+        n = mathutils.Vector((0, 0, 0))
+        for f in sel:
+            n += f.normal
+        if n.length < 1e-9:
+            raise ValueError(
+                "the selected faces point in opposing directions, so there is no "
+                "single normal to extrude along -- give an explicit offset [x,y,z]")
+        vec = n.normalized() * d
+
+    res = bmesh.ops.extrude_face_region(bm, geom=sel)
+    verts = [g for g in res["geom"] if isinstance(g, bmesh.types.BMVert)]
+    bmesh.ops.translate(bm, vec=vec, verts=verts)
+    bmesh.ops.delete(bm, geom=sel, context="FACES")
+
+    new = [g for g in res["geom"] if isinstance(g, bmesh.types.BMFace)]
+    for f in bm.faces:
+        f.select = False
+    for f in new:
+        if f.is_valid:
+            f.select = True
+    _close(bm, ob)
+    return f"{ob.name}: extruded {len(sel)} face(s) by {[round(v, 3) for v in vec]}"
+
+
+def op_bevel_edges(o):
+    """Bevel chosen edges only -- unlike the modifier, which takes all of them."""
+    import bmesh
+    ob = _obj(o["name"])
+    bm = _open(ob)
+    sel = _require(_selected(bm, "edges"), "bevel", o)
+    bmesh.ops.bevel(bm, geom=sel, offset=float(o.get("width", 0.02)),
+                    segments=int(o.get("segments", 2)), affect="EDGES",
+                    profile=float(o.get("profile", 0.5)))
+    _close(bm, ob)
+    return f"{ob.name}: bevelled {len(sel)} edge(s)"
+
+
+def op_loop_cut(o):
+    """Add loops through the selected edges -- support loops, or more resolution."""
+    import bmesh
+    ob = _obj(o["name"])
+    bm = _open(ob)
+    sel = _require(_selected(bm, "edges"), "cut", o)
+    bmesh.ops.subdivide_edges(bm, edges=sel, cuts=int(o.get("cuts", 1)),
+                              use_grid_fill=True)
+    _close(bm, ob)
+    return f"{ob.name}: {o.get('cuts', 1)} cut(s) through {len(sel)} edge(s)"
+
+
+def op_delete_faces(o):
+    import bmesh
+    ob = _obj(o["name"])
+    bm = _open(ob)
+    sel = _require(_selected(bm, "faces"), "delete", o)
+    bmesh.ops.delete(bm, geom=sel, context="FACES")
+    _close(bm, ob)
+    return f"{ob.name}: deleted {len(sel)} face(s)"
+
+
 OPS = {
     "add": op_add,
     "mesh": op_mesh,
     "shade": op_shade,
     "normals": op_normals,
+    "select": op_select,
+    "crease": op_crease,
+    "inset": op_inset,
+    "extrude": op_extrude,
+    "bevel_edges": op_bevel_edges,
+    "loop_cut": op_loop_cut,
+    "delete_faces": op_delete_faces,
     "measure": op_measure,
     "assert": op_assert,
     "extrude_profile": op_extrude_profile,
@@ -546,8 +803,10 @@ def scene():
             "size": [round(v, 3) for v in o.dimensions],
             "rotation_deg": [round(math.degrees(v), 1) for v in o.rotation_euler],
             "modifiers": [m.type for m in o.modifiers],
-            "material": (o.data.materials[0].name
-                         if getattr(o.data, "materials", None) and len(o.data.materials) else None),
+            # A slot can exist and hold nothing. Booleans and inset/extrude
+            # both leave empty slots behind, and reading .name off one took
+            # down the whole result -- after every operation had succeeded.
+            "material": next((m.name for m in getattr(o.data, "materials", None) or [] if m), None),
         })
     return out
 
