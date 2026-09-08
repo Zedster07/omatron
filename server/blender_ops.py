@@ -963,12 +963,18 @@ def op_reference(o):
     if not os.path.exists(path):
         raise ValueError(f"no such reference image: {path}")
 
-    length, height = o.get("length"), o.get("height")
-    if not length and not height:
+    # The horizontal span means something different per view -- length in a
+    # side or top view, width in a front view -- so accept whichever word fits
+    # and treat them all as "across the drawing".
+    across = o.get("length") or o.get("width") or o.get("across")
+    height = o.get("height")
+    if not across and not height:
         raise ValueError(
-            "give the real size of the drawn vehicle: length (along the drawing's "
-            "width) or height. Without it the drawing has no scale, and a reference "
-            "with no scale cannot be compared against or laid under anything.")
+            "give the real size of the drawn vehicle: length/width (across the "
+            "drawing) or height. Without it the drawing has no scale, and a "
+            "reference with no scale cannot be compared against or laid under "
+            "anything.")
+    length = across
 
     img = bpy.data.images.load(path, check_existing=False)
     try:
@@ -1218,6 +1224,208 @@ def op_look(o):
     return f"{label} ({view})"
 
 
+# ------------------------------------------- reading shape out of the drawings
+#
+# One view fixes one plane. A side blueprint pins the profile and says nothing
+# about width, so the first car fitted to one had a measured roofline and a
+# plan view invented by a taper() function -- which is most of what you see
+# from any angle that is not directly side-on.
+#
+# Three views together give: length and height from the side, width along the
+# length from the top, and the shape of the cross-section from the front. That
+# last one is the real prize. It is the only one of the three that describes
+# the section itself rather than an extent, and it is what stops every station
+# being the same invented oval.
+#
+# What three views CANNOT give is the visual hull problem: the intersection of
+# three extrusions is fatter than the object, and no orthographic outline
+# records a crease. This gets you a far better blockout, not a finished
+# surface.
+
+def _reference_mask(view):
+    """The drawing's filled outline, plus the calibration to place it."""
+    raw = bpy.context.scene.get(f"omatron_ref_{view}")
+    if not raw:
+        raise ValueError(
+            f'no {view} reference attached. {{"op":"reference","view":"{view}",'
+            '"image":"...","length":4.17}')
+    try:
+        cal = json.loads(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"the {view} reference predates calibration; attach it again with a size")
+    img = bpy.data.images.load(os.path.expanduser(cal["path"]), check_existing=False)
+    try:
+        mask = _fill_holes(_mask_from_pixels(img.pixels[:], *img.size))
+    finally:
+        bpy.data.images.remove(img)
+    return mask, cal
+
+
+def _trace_view(view, n, floor=None):
+    """Sample a drawing's outline into n slices across it.
+
+    Returns world-space (lo, hi) per slice: z above the ground for a side or
+    front view, y either side of centre for a top view.
+    """
+    import numpy as np
+    mask, cal = _reference_mask(view)
+    mpp = cal["mpp"]
+    x0, x1, ylo, yhi = cal["px"]
+    cx = (x0 + x1) / 2.0
+
+    cols = np.linspace(x0 + 1, x1 - 1, n).astype("int32")
+    out = []
+    for c in cols:
+        rows = np.where(mask[:, c])[0]
+        if not len(rows):
+            out.append(None)
+            continue
+        # Blender pixels are bottom-up, so row index rises with height.
+        lo, hi = float(rows.min()), float(rows.max())
+        if view == "top":
+            # Across a top view, the two edges straddle the centreline.
+            mid = (ylo + yhi) / 2.0
+            out.append(((lo - mid) * mpp, (hi - mid) * mpp))
+        else:
+            out.append(((lo - ylo) * mpp, (hi - ylo) * mpp))
+
+    if floor == "sill" and view != "top":
+        # A side view's lower edge is the TYRES wherever there is a wheel, and
+        # the body's underside everywhere else. Lofting to it drags the body
+        # down to the road at each axle. The sill is the highest that lower
+        # edge gets across the middle of the car -- between the wheels, where
+        # the outline IS the underbody -- and no part of the body sits below
+        # it, so raising every slice to at least that height removes the wheels
+        # from the body's profile and keeps the nose and tail rising away.
+        mid = [v for i, v in enumerate(out)
+               if v and 0.3 < i / max(len(out) - 1, 1) < 0.7]
+        if mid:
+            sill = max(v[0] for v in mid)
+            out = [None if v is None else (max(v[0], sill), v[1]) for v in out]
+
+    span = ((x0 - cx) * mpp, (x1 - cx) * mpp)
+    return {"view": view, "span": span, "slices": out}
+
+
+def op_trace(o):
+    """Measure a reference's outline and keep it for lofting."""
+    view = str(o.get("view", "side")).lower()
+    n = max(4, min(int(o.get("stations", 24)), 120))
+    t = _trace_view(view, n, o.get("floor"))
+    bpy.context.scene[f"omatron_trace_{view}"] = json.dumps(t)
+    good = [s for s in t["slices"] if s]
+    if not good:
+        raise ValueError(f"the {view} drawing has no outline to trace")
+    lo = min(s[0] for s in good)
+    hi = max(s[1] for s in good)
+    return (f"{view}: {n} slices over {t['span'][1] - t['span'][0]:.2f} m, "
+            f"cross extent {lo:.2f} to {hi:.2f} m")
+
+
+def _section_shape(samples=24, start=0.0):
+    """Half-width as a fraction of the maximum, up the height of the car.
+
+    Taken from the FRONT view, this is the actual cross-section of the body --
+    wide at the shoulders, drawn in at the roof, tucked under at the sills. It
+    replaces the invented taper that made every previous car a lozenge. Without
+    a front reference, fall back to a rounded default and say so.
+    """
+    import numpy as np
+    try:
+        mask, cal = _reference_mask("front")
+    except ValueError:
+        fallback = [(k / (samples - 1),
+                     math.sin(math.pi * (0.15 + 0.85 * k / (samples - 1))) ** 0.45)
+                    for k in range(samples)]
+        fallback[0] = (fallback[0][0], 0.0)
+        fallback[-1] = (fallback[-1][0], 0.0)
+        return fallback, False
+
+    x0, x1, ylo, yhi = cal["px"]
+    # `start` skips the bottom of the front view -- the tyres and the gap under
+    # the car, which are not the body's cross-section. Without it the body is
+    # as wide as the track at ground level, i.e. a slab on wheels.
+    lo_row = ylo + (yhi - ylo) * max(0.0, min(start, 0.8))
+    rows = np.linspace(lo_row + 1, yhi - 1, samples).astype("int32")
+    widths = []
+    for r in rows:
+        cols = np.where(mask[r, :])[0]
+        widths.append(0.0 if not len(cols) else float(cols.max() - cols.min()) / 2.0)
+    peak = max(widths) or 1.0
+    shape = [(k / (samples - 1), widths[k] / peak) for k in range(samples)]
+    # Close the section on the centreline at both ends.
+    #
+    # A front silhouette gives the OUTER boundary only, and its lowest and
+    # highest rows are the flat floor and the flat roof -- both a full
+    # half-width across. Lofting that leaves a half-body that never reaches
+    # y=0, so the mirror produces two detached shells with a gap down the
+    # middle. Rendered, that is not a car but a pair of torn ribbons.
+    shape[0] = (shape[0][0], 0.0)
+    shape[-1] = (shape[-1][0], 0.0)
+    return shape, True
+
+
+def op_loft(o):
+    """Build a body from the traced drawings.
+
+    Declarative on purpose: the caller gives station count and a few
+    proportions, and the looping happens here. Emitting 154 vertices as literal
+    JSON is not something to ask of anything that has to reason about them.
+    """
+    name = str(o.get("name", "Body"))
+    n = max(6, min(int(o.get("stations", 24)), 100))
+
+    side = _trace_view("side", n, o.get("floor", "sill"))
+    try:
+        top = _trace_view("top", n)
+        have_top = True
+    except ValueError:
+        top, have_top = None, False
+    shape, have_front = _section_shape(int(o.get("ring", 16)),
+                                       float(o.get("section_from", 0.0)))
+
+    width = float(o.get("width", 1.72)) / 2.0     # used when there is no top view
+    ring = len(shape)
+    verts, faces = [], []
+    x_lo, x_hi = side["span"]
+
+    for i, sl in enumerate(side["slices"]):
+        if sl is None:
+            sl = (0.0, 0.01)
+        zb, zt = sl
+        x = x_lo + (x_hi - x_lo) * i / (n - 1)
+        if have_top and top["slices"][i]:
+            tlo, thi = top["slices"][i]
+            half = max(abs(tlo), abs(thi))
+        else:
+            t = i / (n - 1)
+            half = width * (0.55 + 0.45 * math.sin(math.pi * t) ** 0.3)
+        for f, wf in shape:
+            verts.append((x, half * wf, zb + (zt - zb) * f))
+
+    for i in range(n - 1):
+        a, b = i * ring, (i + 1) * ring
+        for k in range(ring - 1):
+            faces.append((a + k, a + k + 1, b + k + 1, b + k))
+    faces.append(tuple(range(ring - 1, -1, -1)))
+    faces.append(tuple(range(len(verts) - ring, len(verts))))
+
+    res = op_mesh({"name": name, "verts": verts, "faces": faces})
+    op_normals({"name": name})
+    # The loft builds the y >= 0 half; a mirror owns the rest. Without this the
+    # body is an open half-tube that measures, renders and reads as a car from
+    # exactly one side.
+    if o.get("mirror", True):
+        op_modifier({"name": name, "kind": "mirror", "axis": "y"})
+    src = ("side+top+front" if (have_top and have_front)
+           else "side+top" if have_top else "side+front" if have_front else "side only")
+    note = "" if (have_top and have_front) else \
+        f"  [{'no top view: widths along the length are estimated. ' if not have_top else ''}" \
+        f"{'no front view: the cross-section shape is a guess, which is the ' if not have_front else ''}" \
+        f"{'thing three views exist to fix' if not have_front else ''}]"
+    return f"{res} from {src}{note}"
+
+
 OPS = {
     "add": op_add,
     "mesh": op_mesh,
@@ -1225,6 +1433,8 @@ OPS = {
     "normals": op_normals,
     "look": op_look,
     "reference": op_reference,
+    "trace": op_trace,
+    "loft": op_loft,
     "render_view": op_render_view,
     "select": op_select,
     "crease": op_crease,

@@ -3891,7 +3891,13 @@ server.registerTool(
       "  look         label, view staged|side|front|top — render the model AS IT STANDS, mid-batch,\n" +
       "               returned with the numbers that go with it. Use it at each decision and before\n" +
       "               anything irreversible; on failure the looks taken first still come back\n" +
-      "  reference    view side|front|top, image — attach a blueprint and show it in the viewport\n" +
+      "  reference    view side|front|top, image, and its real length/width/height in metres —\n" +
+      "               attach a blueprint, calibrated, placed with its ground line on z=0\n" +
+      "  trace        view, stations, floor:\"sill\" — measure a drawing's outline into slices\n" +
+      "  loft         name, stations, ring, section_from — build a body from the traced views:\n" +
+      "               side gives the profile, top gives width along the length, FRONT gives the\n" +
+      "               cross-section shape, which is the one that stops every station being an\n" +
+      "               invented oval. Mirrors by default\n" +
       "  render_view  view, to — an orthographic view; a silhouette shows proportion faults a\n" +
       "               three-quarter render hides\n" +
       "  select       name, plus region [x0,y0,z0,x1,y1,z1] | normal +x|-x|+y|-y|+z|-z with tol\n" +

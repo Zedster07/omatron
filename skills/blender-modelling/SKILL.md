@@ -195,6 +195,36 @@ something no number had caught — a model built mirrored, cabin left against th
 drawing's cabin right. A mirrored car has an identical bounding box, so the
 aspect-ratio check scored it a perfect fit.
 
+**Three views, not one.** A side blueprint pins the profile and says nothing
+about width — which is most of what you see from any angle that is not directly
+side-on.
+
+    {op:"reference", view:"side",  image:"...", length:3.962}
+    {op:"reference", view:"top",   image:"...", length:3.962}
+    {op:"reference", view:"front", image:"...", width:1.727}
+    {op:"loft", name:"Body", stations:30, ring:18, section_from:0.30}
+
+Side gives the profile, top gives width along the length, and **front gives the
+cross-section shape** — the only one of the three that describes the section
+rather than an extent, and the one that stops every station being the same
+invented oval. Check the reported mm/px across views: if they disagree, the
+drawings are not to a common scale and nothing built from them will be either.
+
+Two settings earn their keep. `floor:"sill"` stops the side profile following
+the *tyres* down to the road at each axle — the sill is the highest the lower
+edge reaches between the wheels, and no part of the body sits below it.
+`section_from` trims the bottom of the front view, which is running gear, not
+bodywork; without it the body is as wide as the track at ground level.
+
+**And know what three views cannot give you.** The intersection of three
+extrusions is fatter than the real object, and no orthographic outline records
+a crease. Worse, one front view supplies one section shape, scaled to every
+station — but a real body changes section along its length, and nothing in
+three silhouettes says how. A Shelby Cobra traced this way fits its side
+profile well and still renders as a lump, because a roadster with flared arches
+and an open cockpit is close to the worst case: its outlines enclose far more
+than its body. Expect a good blockout, not a finished surface.
+
 **Trace the drawing; do not eyeball it.** A blueprint holds the profile
 already — read the outline column by column and let it give you the station
 heights. Fitted that way an Alfa 147 reached 73% silhouette overlap
