@@ -3872,6 +3872,12 @@ server.registerTool(
       "the result. Operations are applied in order and the file is saved ONLY if all of them succeed, so a " +
       "failed batch leaves the model exactly as it was.\n" +
       "\n" +
+      "  extrude_profile   profile [[x,z],…] a CLOSED outline, width, plane xz|xy|yz, name, at, shade\n" +
+      "               How hard-surface shapes are actually made: draw the silhouette, give it depth.\n" +
+      "               A car's side view, a bracket, a bottle, a keycap — all profiles. Reach for this\n" +
+      "               BEFORE stacking primitives: four cubes and a cylinder is a bill of materials,\n" +
+      "               not a model, and it always looks like one.\n" +
+      "  mesh         verts [[x,y,z],…], faces [[i,j,k,…],…], name, at, shade — explicit geometry\n" +
       "  add          primitive: cube | sphere | cylinder | cone | torus | plane,\n" +
       "               size, at [x,y,z], rotation_deg [x,y,z], name, and depth/thickness where they apply\n" +
       "  transform    name, plus at [x,y,z] or move_by [x,y,z], rotation_deg, scale (number or [x,y,z])\n" +

@@ -164,8 +164,69 @@ def op_material(o):
     return f"{ob.name}: {mat.name}"
 
 
+
+def op_mesh(o):
+    """Build an object from explicit vertices and faces.
+
+    The op set started as primitives plus modifiers, which assembles shapes but
+    does not model: a cube and four cylinders is a bill of materials, and
+    bevelling it does not make it geometry. This is the missing primitive --
+    real vertices, in the positions the caller worked out.
+    """
+    verts = [tuple(float(c) for c in v) for v in o["verts"]]
+    faces = [tuple(int(i) for i in f) for f in o.get("faces", [])]
+    for f in faces:
+        for i in f:
+            if i < 0 or i >= len(verts):
+                raise ValueError(f"face references vertex {i}, but there are only {len(verts)}")
+
+    me = bpy.data.meshes.new(o.get("name", "Mesh"))
+    me.from_pydata(verts, [], faces)
+    me.validate()
+    me.update()
+    ob = bpy.data.objects.new(o.get("name", "Mesh"), me)
+    bpy.context.collection.objects.link(ob)
+    ob.location = _vec(o.get("at"))
+    if o.get("shade") == "smooth":
+        for poly in me.polygons:
+            poly.use_smooth = True
+    return f"{ob.name} ({len(verts)} verts, {len(faces)} faces)"
+
+
+def op_extrude_profile(o):
+    """A closed 2D outline, given thickness.
+
+    How hard-surface shapes are actually made: draw the silhouette, then give
+    it depth. A car's side view -- sloped bonnet, raked screen, roofline,
+    tapered boot -- is a profile, and no arrangement of cubes reproduces one.
+    """
+    prof = [(float(a), float(b)) for a, b in o["profile"]]
+    if len(prof) < 3:
+        raise ValueError("a profile needs at least three points")
+    w = float(o.get("width", 1.0)) / 2
+    axis = o.get("plane", "xz")
+
+    def place(u, v, side):
+        if axis == "xz":
+            return (u, side * w, v)
+        if axis == "xy":
+            return (u, v, side * w)
+        return (side * w, u, v)          # yz
+
+    n = len(prof)
+    verts = [place(u, v, -1) for u, v in prof] + [place(u, v, 1) for u, v in prof]
+    faces = [tuple(range(n - 1, -1, -1)), tuple(range(n, 2 * n))]
+    for i in range(n):                    # the wall between the two outlines
+        j = (i + 1) % n
+        faces.append((i, j, j + n, i + n))
+
+    return op_mesh({"name": o.get("name", "Profile"), "verts": verts,
+                    "faces": faces, "at": o.get("at"), "shade": o.get("shade")})
+
 OPS = {
     "add": op_add,
+    "mesh": op_mesh,
+    "extrude_profile": op_extrude_profile,
     "transform": op_transform,
     "modifier": op_modifier,
     "apply_modifiers": op_apply_modifiers,
