@@ -1849,7 +1849,11 @@ def op_smooth(o):
     import bmesh
     ob = _obj(o["name"])
     bm = _open(ob)
-    sel = [v for v in bm.verts if v.select] or bm.verts[:]
+    sel = ([v for v in bm.verts if v.select]
+           if o.get("only_selected") else bm.verts[:])
+    if not sel:
+        bm.free()
+        raise ValueError(f"nothing selected on {ob.name} to smooth")
     for _ in range(max(1, min(int(o.get("iterations", 2)), 20))):
         bmesh.ops.smooth_vert(bm, verts=sel, factor=float(o.get("factor", 0.5)),
                               use_axis_x=True, use_axis_y=True, use_axis_z=True)
@@ -2222,6 +2226,144 @@ def op_view_angle(o):
     return f"looking {key}"
 
 
+def op_subdivide_mesh(o):
+    """Cut every edge (or the selected ones) -- real geometry, not a modifier.
+
+    The subdivision MODIFIER smooths: it makes a coarse cage look soft without
+    giving you anything to grab. This adds actual vertices in actual places, so
+    the next thing you do can move them. Coarse cage, subdivide, fit, subdivide,
+    fit -- that is how a form is refined from blueprints, and none of it
+    involves smoothing anything.
+    """
+    import bmesh
+    ob = _obj(o["name"])
+    bm = _open(ob)
+    sel = ([e for e in bm.edges if e.select]
+           if o.get("only_selected") else bm.edges[:])
+    if not sel:
+        bm.free()
+        raise ValueError(f"nothing selected on {ob.name} to subdivide")
+
+    # A budget, checked BEFORE the operation runs.
+    #
+    # Subdivision with grid fill multiplies face count by (cuts+1)^2, so it
+    # compounds: three rounds on a cube reached 3.5 million vertices, took the
+    # machine into swap and wrote a 140 MB .blend. Nothing warned, because
+    # nothing was watching -- the operation is perfectly happy to do what it
+    # was asked. Predict the result and refuse, rather than discover it.
+    budget = max(1000, min(int(o.get("budget", 200_000)), 2_000_000))
+    cuts = max(1, min(int(o.get("cuts", 1)), 8))
+    predicted = len(bm.faces) * (cuts + 1) ** 2
+    if predicted > budget:
+        have, faces = len(bm.verts), len(bm.faces)
+        bm.free()
+        raise ValueError(
+            f"{cuts} cut(s) on {faces} face(s) would make about {predicted:,} faces, over the "
+            f"{budget:,} budget ({ob.name} currently has {have:,} verts). Subdivision "
+            f"multiplies by (cuts+1)^2 and compounds every time it is run, so this is how a "
+            f"model reaches millions of vertices in three steps. Use fewer cuts, subdivide "
+            f"only the part that needs resolution, or raise budget deliberately.")
+
+    before = len(bm.verts)
+    bmesh.ops.subdivide_edges(bm, edges=sel, cuts=max(1, min(int(o.get("cuts", 1)), 8)),
+                              use_grid_fill=True, smooth=float(o.get("smooth", 0.0)))
+    after = len(bm.verts)
+    _close(bm, ob)
+    return f"{ob.name}: {before} -> {after} verts"
+
+
+def op_fit(o):
+    """Push the mesh onto the shape the reference drawings describe.
+
+    Not a loft -- a FIT. Take whatever geometry is there, and for each vertex
+    look up how tall and how wide the car is at that point along its length,
+    then move the vertex to sit at the same relative position inside those
+    real bounds. A box becomes a car-shaped block; subdivide and fit again and
+    it picks up the curve of the roofline and the taper of the plan.
+
+    This is what working to a blueprint actually is, and it needs no modifier
+    and no smoothing: the vertices go where the drawings say, and the shape is
+    whatever those points describe.
+    """
+    ob = _obj(o["name"])
+    n = max(8, min(int(o.get("samples", 96)), 400))
+    side = _trace_view("side", n, o.get("floor", "sill"))
+    try:
+        top = _trace_view("top", n)
+    except ValueError:
+        top = None
+    if not any(side["slices"]):
+        raise ValueError("the side drawing traced to nothing")
+
+    x_lo, x_hi = side["span"]
+    bm = _open(ob)
+    # Everything, unless the caller ASKS for the selection.
+    #
+    # "selected, or all if nothing is selected" reads as helpful and is a trap:
+    # a primitive arrives with its own vertices selected, so after adding a cube
+    # and subdividing it to 98 vertices, a fit silently moved the 8 original
+    # corners and left the rest where they were. It reported success. Requiring
+    # only_selected makes the narrow case deliberate.
+    verts = ([v for v in bm.verts if v.select]
+             if o.get("only_selected") else bm.verts[:])
+    if not verts:
+        bm.free()
+        raise ValueError(f"nothing selected on {ob.name} to fit")
+    mw, inv = ob.matrix_world, ob.matrix_world.inverted_safe()
+
+    world = [mw @ v.co for v in verts]
+    xs = [w.x for w in world]
+    zs = [w.z for w in world]
+    ys = [abs(w.y) for w in world]
+    x0m, x1m = min(xs), max(xs)
+    z0, z1 = min(zs), max(zs)
+    ymax = max(ys) or 1.0
+    zspan = (z1 - z0) or 1.0
+    xspan = (x1m - x0m) or 1.0
+
+    def sample(track, t):
+        """The drawing's extent a fraction t along the car, interpolated."""
+        f = max(0.0, min(t, 1.0)) * (len(track) - 1)
+        i = int(f)
+        a = track[min(i, len(track) - 1)]
+        b = track[min(i + 1, len(track) - 1)]
+        if a is None or b is None:
+            return a or b
+        k = f - i
+        return (a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k)
+
+    missed = 0
+    for v, w in zip(verts, world):
+        # Along the car by the vertex's own position in the mesh, not its world
+        # x -- a 2 m cube fitted to a 4 m car has to STRETCH, and reading world
+        # x against the drawing's span left it 2 m long with the right cross
+        # section, which looked like the fit had simply not run.
+        t = (w.x - x0m) / xspan
+        x = x_lo + (x_hi - x_lo) * t
+        sv = sample(side["slices"], t)
+        if sv is None:
+            missed += 1
+            continue
+        zb, zt = sv
+        # Where this vertex sits between the mesh's own floor and roof, kept.
+        f = (w.z - z0) / zspan
+        z = zb + (zt - zb) * f
+
+        y = w.y
+        if top is not None:
+            tv = sample(top["slices"], t)
+            if tv is not None:
+                half = max(abs(tv[0]), abs(tv[1]))
+                y = (w.y / ymax) * half
+
+        v.co = inv @ mathutils.Vector((x, y, z))
+
+    _close(bm, ob)
+    src = "side+top" if top is not None else "side only"
+    return (f"{ob.name}: fitted {len(verts) - missed} vert(s) to {src}"
+            + (f", {missed} outside the drawing" if missed else ""))
+
+
 OPS = {
     "add": op_add,
     "mesh": op_mesh,
@@ -2251,6 +2393,8 @@ OPS = {
     "extrude": op_extrude,
     "bevel_edges": op_bevel_edges,
     "loop_cut": op_loop_cut,
+    "subdivide": op_subdivide_mesh,
+    "fit": op_fit,
     "delete_faces": op_delete_faces,
     "measure": op_measure,
     "assert": op_assert,
