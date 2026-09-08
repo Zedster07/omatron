@@ -3888,6 +3888,9 @@ server.registerTool(
       "  shade        name, smooth true|false, angle_deg — smooth above the angle, sharp below it\n" +
       "  normals      name — recalculate outward. ALWAYS do this after building a mesh by hand;\n" +
       "               a face wound the wrong way shades as a hole\n" +
+      "  look         label, view staged|side|front|top — render the model AS IT STANDS, mid-batch,\n" +
+      "               returned with the numbers that go with it. Use it at each decision and before\n" +
+      "               anything irreversible; on failure the looks taken first still come back\n" +
       "  reference    view side|front|top, image — attach a blueprint and show it in the viewport\n" +
       "  render_view  view, to — an orthographic view; a silhouette shows proportion faults a\n" +
       "               three-quarter render hides\n" +
@@ -3906,6 +3909,11 @@ server.registerTool(
       "  assert       the same measurements, but REQUIRED to hold; a failed assert aborts the batch unsaved\n" +
       "  material     name, material, color [r,g,b] 0-1, roughness, metallic\n" +
       "  delete / rename   name (rename also takes to)\n" +
+      "\n" +
+      "DO NOT BUILD BLIND. Put {op:\"look\", label:\"...\"} at the points where you made a decision, and " +
+      "always before a boolean, an apply_modifiers or a subdivision — the operations that destroy what you " +
+      "would want to go back to. Each look returns a render AND the numbers for that moment, and looks survive " +
+      "a later failure, so a broken batch tells you where it broke rather than only that it did.\n" +
       "\n" +
       "MEASURE, do not squint at the render. A picture will not tell you that a part is buried inside another " +
       "one, that two parts pass through each other, or that a wheel floats above the ground — and all three of " +
@@ -3964,12 +3972,35 @@ server.registerTool(
       ...(shot ? { render: shot, width: 800, height: 600 } : {}),
     })
 
+    // Checkpoint pictures, read once and reused by both the success and the
+    // failure path. A failed batch is exactly when they are worth most: the
+    // error says WHAT broke, and these show what the model looked like on the
+    // way there, which is the difference between "the nose is mangled" and
+    // "the nose was fine until the second inset".
+    const shots: Content[] = []
+    for (const [i, c] of (r.checkpoints ?? []).entries()) {
+      shots.push({ type: "text", text: blender.describeCheckpoint(c, i + 1) })
+      try {
+        const bytes = await fs.readFile(c.image)
+        shots.push({ type: "image", data: bytes.toString("base64"), mimeType: "image/png" })
+      } catch {
+        shots.push({ type: "text", text: "      (this checkpoint's render could not be read back)" })
+      }
+    }
+
     if (r.errors.length) {
-      throw new Refused(
+      const text =
         `REFUSED: ${r.errors.join("; ")}\n` +
-          `  ${r.applied.length} earlier operation(s) were discarded — the file is unchanged, so the\n` +
-          "  scene still matches what you last read. Fix the operation and send the batch again.",
-      )
+        `  ${r.applied.length} earlier operation(s) were discarded — the file is unchanged, so the\n` +
+        "  scene still matches what you last read. Fix the operation and send the batch again." +
+        (shots.length
+          ? `\n  ${r.checkpoints!.length} checkpoint(s) taken before the failure follow — the last one\n` +
+            "  is the state the failing operation was applied to."
+          : "")
+      // Returned as content, not thrown: a thrown Refused carries a string and
+      // nothing else, and the pictures are the useful half of this answer.
+      if (shots.length) return say(text, shots)
+      throw new Refused(text)
     }
 
     await audit(policy, `blender ${args.project}: ${summary}`)
@@ -3994,10 +4025,11 @@ server.registerTool(
       try {
         const bytes = await fs.readFile(r.render)
         return say(notes.join("\n"),
-                   [{ type: "image", data: bytes.toString("base64"), mimeType: "image/png" }])
+                   [...shots,
+                    { type: "image", data: bytes.toString("base64"), mimeType: "image/png" }])
       } catch { notes.push("(the render could not be read back)") }
     }
-    return say(notes.join("\n"))
+    return say(notes.join("\n"), shots)
   }),
 )
 

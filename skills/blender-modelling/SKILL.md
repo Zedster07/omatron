@@ -187,6 +187,40 @@ distance. It asks about shape, not scale.
 Do that early: a silhouette shows proportion faults that a three-quarter
 render hides completely.
 
+## Look while you work, not only at the end
+
+A batch used to be blind: apply forty operations, render once, and discover the
+nose was mangled with no idea which operation did it. That is feedback about
+the result, not about the process — it costs the whole build and tells you
+nothing about where it went wrong.
+
+`{op:"look", label:"..."}` renders the model as it stands, mid-batch, and
+returns the picture **with the numbers that go with it** — object list, face
+counts, sizes, and every measurement taken since the previous look. Several in
+one batch and you watch the form arrive step by step.
+
+Look at the points where a decision was made:
+
+    {op:"look", label:"blockout — proportions only"}
+    ... arches, glazing ...
+    {op:"look", label:"after the boolean", view:"side"}
+
+Especially **before anything irreversible** — a boolean, an apply_modifiers, a
+subdivision. Those are the operations that destroy the thing you would want to
+go back to.
+
+When a later operation fails, the looks taken before it still come back. That
+is the difference between "the nose is mangled" and "the nose was fine until
+the second inset" — the failure arrives with the evidence.
+
+Use both halves. The picture shows what a number cannot: that a form reads as
+a car, that a surface is lumpy, that a panel gap looks wrong. The numbers show
+what a picture cannot: that a part is buried, that two parts interpenetrate,
+that a wheel floats. Neither alone is enough, which is why a look returns both.
+
+Eight looks per batch is the limit, and hitting it means the batch is doing too
+much at once. Split it and look between the calls.
+
 ## Measure. Do not squint at the render
 
 A picture will not tell you that a part is buried inside another one, that two

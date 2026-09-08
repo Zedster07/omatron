@@ -18,6 +18,7 @@ import mathutils
 import math
 import os
 import sys
+import tempfile
 
 
 def _args():
@@ -1007,11 +1008,87 @@ def op_render_view(o):
     return f"{view} view -> {out}"
 
 
+# ------------------------------------------------------------------ looking
+#
+# The batch used to be blind: apply forty operations, render once at the end,
+# and discover the nose was mangled with no idea which operation did it. The
+# render was feedback about the RESULT, not about the process, so a bad result
+# cost the whole build and told you nothing about where it went wrong.
+#
+# A look is a checkpoint: the model as it stands, right now, with the numbers
+# that go with that picture. Several in one batch and you can see the form
+# arrive step by step -- and when a later operation fails, the looks taken
+# before it still come back, so the failure arrives WITH the evidence.
+
+CHECKPOINTS = []
+LOOK_LIMIT = 8
+
+
+def _look_stats():
+    """The numbers beside the picture. Compact -- this is read, not stored."""
+    dg = bpy.context.evaluated_depsgraph_get()
+    rows, faces = [], 0
+    for ob in bpy.data.objects:
+        if ob.type != "MESH":
+            continue
+        ev = ob.evaluated_get(dg)
+        me = ev.to_mesh()
+        try:
+            n = len(me.polygons)
+        finally:
+            ev.to_mesh_clear()
+        faces += n
+        lo, hi = _bounds(ob, dg)
+        rows.append({"name": ob.name, "faces": n,
+                     "size": [round(hi[i] - lo[i], 3) for i in range(3)]})
+    return {"objects": rows, "faces": faces}
+
+
+def op_look(o):
+    """Render the model as it stands, part-way through the batch."""
+    if len(CHECKPOINTS) >= LOOK_LIMIT:
+        raise ValueError(
+            f"that is more than {LOOK_LIMIT} looks in one batch. Each one is a full "
+            "render; if you need more checkpoints than this, the batch is doing too "
+            "much at once -- split it and look between the calls instead.")
+
+    label = str(o.get("label") or f"step {len(CHECKPOINTS) + 1}")
+    view = str(o.get("view", "staged")).lower()
+    res = max(160, min(int(o.get("resolution", 480)), 900))
+    out = os.path.join(tempfile.gettempdir(),
+                       f"omatron-look-{os.getpid()}-{len(CHECKPOINTS)}.png")
+
+    if view in _VIEWS:
+        _render_ortho(view, out, res)
+    else:
+        r = bpy.context.scene.render
+        keep = (r.filepath, r.resolution_x, r.resolution_y, r.film_transparent)
+        try:
+            _stage()
+            r.filepath = out
+            r.resolution_x, r.resolution_y = res, int(res * 0.75)
+            r.film_transparent = False
+            r.image_settings.file_format = "PNG"
+            bpy.ops.render.render(write_still=True)
+        finally:
+            (r.filepath, r.resolution_x, r.resolution_y, r.film_transparent) = keep
+
+    # The measurements taken since the previous look belong to THIS picture.
+    since = CHECKPOINTS[-1]["measured_to"] if CHECKPOINTS else 0
+    CHECKPOINTS.append({
+        "label": label, "view": view, "image": out,
+        "stats": _look_stats(),
+        "measured": MEASURED[since:], "measured_to": len(MEASURED),
+    })
+    return f"{label} ({view})"
+
+
 OPS = {
     "add": op_add,
     "mesh": op_mesh,
     "shade": op_shade,
     "normals": op_normals,
+    "look": op_look,
     "reference": op_reference,
     "render_view": op_render_view,
     "select": op_select,
@@ -1152,7 +1229,7 @@ def main():
 
     print("OMATRON_RESULT " + json.dumps({
         "applied": done, "errors": errors, "scene": scene(), "render": render,
-        "measured": MEASURED,
+        "measured": MEASURED, "checkpoints": CHECKPOINTS,
     }))
 
 

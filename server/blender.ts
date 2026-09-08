@@ -14,11 +14,32 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
+export type Checkpoint = {
+  label: string
+  view: string
+  image: string
+  stats: { objects: Array<{ name: string; faces: number; size: number[] }>; faces: number }
+  measured: Array<Record<string, unknown>>
+}
+
 export type BlenderResult = {
   applied: string[]
   errors: string[]
   scene: Array<Record<string, unknown>>
   render: string | null
+  checkpoints?: Checkpoint[]
+}
+
+/** A checkpoint's numbers, as the line that introduces its picture. */
+export function describeCheckpoint(c: Checkpoint, n: number): string {
+  const parts = [`[${n}] ${c.label}${c.view !== "staged" ? ` (${c.view})` : ""} — ` +
+                 `${c.stats.objects.length} object(s), ${c.stats.faces} faces`]
+  for (const o of c.stats.objects) {
+    parts.push(`      ${o.name.padEnd(14)} ${String(o.faces).padStart(6)} faces  ` +
+               `${o.size.map((v) => v.toFixed(2)).join(" x ")}`)
+  }
+  for (const m of c.measured) parts.push(`      ${JSON.stringify(m)}`)
+  return parts.join("\n")
 }
 
 /** Where models live. The person's own directory, like saved answers. */
