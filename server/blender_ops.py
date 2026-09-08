@@ -877,12 +877,22 @@ def op_select(o):
         f.select = False
     for e in bm.edges:
         e.select = False
+    for v in bm.verts:
+        v.select = False
     if want in ("faces", "both"):
         for f in faces:
             f.select = True
-    if want in ("edges", "both"):
+    if want in ("edges", "both", "verts"):
         for e in edges:
             e.select = True
+    # Vertices follow whatever was picked, so `move` has something to grab
+    # whichever mode the caller chose.
+    for e in edges if want in ("edges", "both", "verts") else []:
+        e.verts[0].select = True
+        e.verts[1].select = True
+    for f in faces if want in ("faces", "both") else []:
+        for v in f.verts:
+            v.select = True
 
     n_f, n_e = len(faces) if want != "edges" else 0, len(edges) if want != "faces" else 0
     _close(bm, ob)
@@ -1813,6 +1823,98 @@ def op_smooth(o):
     return f"{ob.name}: relaxed {len(sel)} vert(s)"
 
 
+def _sel_verts(bm):
+    """The vertices under the current selection, however it was made."""
+    verts = {v for v in bm.verts if v.select}
+    for e in bm.edges:
+        if e.select:
+            verts.update(e.verts)
+    for f in bm.faces:
+        if f.select:
+            verts.update(f.verts)
+    return list(verts)
+
+
+def op_move(o):
+    """Push and pull the selection. The most basic modelling action there is.
+
+    Everything else here ADDS geometry or CUTS it -- extrude, inset, bevel,
+    boolean. None of them shape what is already there. A modeller spends most
+    of their time grabbing something and moving it, and without this the tool
+    could build a form and then never adjust one.
+
+    Works in world space on the vertices under the selection, whether that
+    selection was made by region, by normal, or by walking a loop.
+    """
+    import bmesh
+    ob = _obj(o["name"])
+    bm = _open(ob)
+    verts = _require(_sel_verts(bm), "move", o)
+    mw = ob.matrix_world
+    inv = mw.inverted_safe()
+
+    if "along_normal" in o:
+        # Along the surface, rather than along an axis. What "pull this out"
+        # means on a curved body, where no world axis is the right direction.
+        d = float(o["along_normal"])
+        n = mathutils.Vector((0, 0, 0))
+        for f in bm.faces:
+            if f.select:
+                n += f.normal
+        if n.length < 1e-9:
+            for v in verts:
+                n += v.normal
+        if n.length < 1e-9:
+            bm.free()
+            raise ValueError(
+                "the selection has no consistent normal to move along -- it faces "
+                "opposing ways. Give an explicit offset [x,y,z] instead.")
+        offset = (mw.to_3x3() @ n.normalized()) * d
+    else:
+        offset = mathutils.Vector(_vec(o.get("offset")))
+
+    centre = mathutils.Vector(_vec(o["about"])) if "about" in o else None
+    if centre is None and ("scale" in o or "rotate_deg" in o):
+        # Default pivot is the selection's own middle, which is what "scale
+        # this up" means when nobody named a pivot.
+        acc = mathutils.Vector((0, 0, 0))
+        for v in verts:
+            acc += mw @ v.co
+        centre = acc / len(verts)
+
+    rot = None
+    if "rotate_deg" in o:
+        axis = mathutils.Vector(_vec(o.get("axis"), (0.0, 0.0, 1.0))).normalized()
+        rot = mathutils.Matrix.Rotation(math.radians(float(o["rotate_deg"])), 3, axis)
+
+    sc = o.get("scale")
+    if sc is not None:
+        sc = mathutils.Vector(_vec(sc) if isinstance(sc, (list, tuple))
+                              else (float(sc),) * 3)
+
+    for v in verts:
+        w = mw @ v.co
+        if sc is not None:
+            w = centre + mathutils.Vector(
+                ((w.x - centre.x) * sc.x, (w.y - centre.y) * sc.y, (w.z - centre.z) * sc.z))
+        if rot is not None:
+            w = centre + (rot @ (w - centre))
+        w = w + offset
+        v.co = inv @ w
+
+    bmesh.ops.recalc_face_normals(bm, faces=[f for f in bm.faces if f.select] or bm.faces)
+    n = len(verts)
+    _close(bm, ob)
+    what = []
+    if offset.length > 1e-9:
+        what.append(f"moved {[round(c, 4) for c in offset]}")
+    if sc is not None:
+        what.append(f"scaled {[round(c, 3) for c in sc]}")
+    if rot is not None:
+        what.append(f"rotated {o['rotate_deg']}deg")
+    return f"{ob.name}: {n} vert(s) " + (", ".join(what) or "unchanged")
+
+
 OPS = {
     "add": op_add,
     "mesh": op_mesh,
@@ -1830,6 +1932,7 @@ OPS = {
     "bridge": op_bridge,
     "separate": op_separate,
     "clean": op_clean,
+    "move": op_move,
     "smooth": op_smooth,
     "crease": op_crease,
     "inset": op_inset,

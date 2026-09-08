@@ -3907,13 +3907,16 @@ server.registerTool(
       "  select_loop  name, near [x,y,z], ring true|false — the edge loop (or ring) nearest a\n" +
       "               point. THE selection of real modelling; region and normal are spatial\n" +
       "               queries, loops are how a form is actually worked. Bevel a LOOP, never a ring\n" +
+      "  move         name, offset [x,y,z] | along_normal d | scale | rotate_deg + axis, about —\n" +
+      "               push and pull the SELECTION. Everything else adds geometry or cuts it;\n" +
+      "               this is the one that shapes what is already there\n" +
       "  bridge       name — surface the selected edge loops together\n" +
       "  separate     name, to — split the selected faces into their own object (panels, parts)\n" +
       "  clean        name, distance, dissolve_flat — merge doubles, drop loose geometry; the\n" +
       "               tidy-up every boolean needs before subdivision behaves\n" +
       "  smooth       name, iterations, factor — relax the selection without moving the form\n" +
       "  select       name, plus region [x0,y0,z0,x1,y1,z1] | normal +x|-x|+y|-y|+z|-z with tol\n" +
-      "               | sharper_than degrees; elements faces|edges|both. Selection persists across\n" +
+      "               | sharper_than degrees; elements faces|edges|verts|both. Selection persists across\n" +
       "               the ops below. An empty selection is an error, never a silent no-op\n" +
       "  crease       weight 0-1 on selected edges — holds a feature line through subdivision\n" +
       "  inset        thickness, depth — rings faces inward; leaves the inner faces selected\n" +

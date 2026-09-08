@@ -61,6 +61,28 @@ Repeat the first point at the end to close the section. A revolved profile
 comes out all quads with no non-manifold edges — the cleanest geometry this
 tool produces.
 
+## Push and pull what is already there
+
+Every other operation either adds geometry or cuts it. `move` is the one that
+shapes it, and it is what a modeller spends most of their time doing: grab
+something, put it somewhere better.
+
+    {op:"select", name:"Box", region:[-1.1,-1.1,0.9, 1.1,1.1,1.1]}
+    {op:"move",   name:"Box", offset:[0,0,0.6]}
+    {op:"move",   name:"Box", scale:[0.55,0.55,1.0]}
+
+That takes a cube to a tapered plinth in three lines. It works on the vertices
+under the selection however that selection was made — region, normal, or a
+walked loop — and takes `offset`, `scale`, `rotate_deg` with an `axis`, and an
+optional `about` pivot (the selection's own middle by default).
+
+`along_normal` moves along the surface rather than along a world axis, which is
+what "pull this out" means on a curved body where no axis is the right
+direction.
+
+Build a form, then **adjust** it. A shape that can only be extruded and cut,
+never nudged, is a shape you have to get right first time.
+
 ## Work in loops, not boxes
 
 `select` by region and normal is a spatial query. Real modelling is loops: pick
