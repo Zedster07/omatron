@@ -128,6 +128,35 @@ export function describeScene(scene: BlenderResult["scene"]): string {
   return rows.join("\n")
 }
 
+
+/**
+ * Close Omatron viewers that are watching some other project.
+ *
+ * Matched on the command line -- blender_watch.py plus a path under the models
+ * directory -- because that pair is ours and nothing else is. Class "blender"
+ * would also match the person's own session, and killing that would be
+ * unforgivable: theirs holds unsaved work, ours reloads from disk by design
+ * and loses nothing.
+ */
+async function closeStaleViewers(keep: string): Promise<void> {
+  let pids: string[]
+  try {
+    const listed = Bun.spawnSync(["pgrep", "-f", "blender_watch.py"])
+    pids = new TextDecoder().decode(listed.stdout).split("\n").filter(Boolean)
+  } catch { return }
+
+  for (const pid of pids) {
+    try {
+      const raw = await fs.readFile(`/proc/${pid}/cmdline`, "utf8")
+      const argv = raw.split("\0").filter(Boolean)
+      const watched = argv.find((a) => a.startsWith(MODELS) && a.endsWith(".blend"))
+      if (!watched) continue                       // not one of ours
+      if (watched === projectPath(keep)) continue  // the one we want
+      process.kill(Number(pid), "SIGTERM")
+    } catch {}
+  }
+}
+
 const WATCH_SCRIPT = new URL("./blender_watch.py", import.meta.url).pathname
 let ruleFor = 0
 
@@ -145,6 +174,22 @@ export async function openViewer(project: string, workspace: number): Promise<bo
   if (!bin) return false
   const file = projectPath(project)
   try { await fs.access(file) } catch { return false }
+
+  // Close viewers on OTHER projects FIRST -- before the already-watching fast
+  // path below, which returns early and would otherwise leave them running
+  // exactly in the case where the right window is already up and a wrong one
+  // is sitting next to it.
+  //
+  // A viewer watches one path forever. Build a second model and the first
+  // window sits there showing the first model, which is not stale-looking --
+  // it looks exactly like a current, correct viewer of the wrong thing. That
+  // is how workspace 10 ended up displaying a car three revisions old while
+  // its replacement had never been opened at all.
+  //
+  // One viewer, showing what is being worked on. Identified by the watch
+  // script in the process's own command line, never by window class, so the
+  // person's own Blender is never a candidate however it is titled.
+  await closeStaleViewers(project)
 
   // Already watching? Two viewers on one file would both reload correctly and
   // the person would get two windows for no reason.
