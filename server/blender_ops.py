@@ -939,6 +939,36 @@ def _mask_from_pixels(px, w, h):
     return ink if ink.mean() < 0.5 else ~ink
 
 
+def _fill_holes(mask):
+    """Close interior gaps, so the outline is the SILHOUETTE and nothing else.
+
+    A drawn car is not one flat colour: this blueprint has pale blue glass and
+    grey wheel centres, which the ink threshold reads as paper and punches into
+    holes. The outline of the car is unaffected by what colour its windows are,
+    so the comparison should not be either.
+
+    Flood from the border; whatever the flood cannot reach is inside.
+    """
+    import numpy as np
+    bg = ~mask
+    reach = np.zeros_like(bg)
+    reach[0, :] |= bg[0, :]
+    reach[-1, :] |= bg[-1, :]
+    reach[:, 0] |= bg[:, 0]
+    reach[:, -1] |= bg[:, -1]
+    for _ in range(mask.shape[0] + mask.shape[1]):
+        grown = reach.copy()
+        grown[1:, :] |= reach[:-1, :]
+        grown[:-1, :] |= reach[1:, :]
+        grown[:, 1:] |= reach[:, :-1]
+        grown[:, :-1] |= reach[:, 1:]
+        grown &= bg
+        if (grown == reach).all():
+            break
+        reach = grown
+    return ~reach
+
+
 def _normalised(mask, grid=128):
     """Crop to the outline's own box, then resample to a fixed grid.
 
@@ -953,7 +983,7 @@ def _normalised(mask, grid=128):
     sub = mask[rows[0]:rows[-1] + 1, cols[0]:cols[-1] + 1]
     ys = (np.linspace(0, sub.shape[0] - 1, grid)).astype("int32")
     xs = (np.linspace(0, sub.shape[1] - 1, grid)).astype("int32")
-    return sub[ys][:, xs], (len(cols), len(rows))
+    return _fill_holes(sub[ys][:, xs]), (len(cols), len(rows))
 
 
 def _render_ortho(view, path, res=400):

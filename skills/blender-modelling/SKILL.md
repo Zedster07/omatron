@@ -183,6 +183,22 @@ Both are computed after normalising each outline to its own bounding box, so a
 drawing scanned at any size compares correctly against a render at any
 distance. It asks about shape, not scale.
 
+**Trace the drawing; do not eyeball it.** A blueprint holds the profile
+already — read the outline column by column and let it give you the station
+heights. Fitted that way, an Alfa 147 came out 0.8% off the drawing's
+proportions, against 6% for the same car built from numbers that merely
+sounded right.
+
+And check the silhouette on the **whole** model, not part of it. A blockout
+with no wheels measured 16% out against a drawing whose outline runs down to
+the tyre contact patch — the model was fine, the comparison was not yet the
+same question.
+
+One blueprint constrains one plane. A side view fixes the profile and says
+nothing about width: the car built from this one has a correct roofline and an
+invented plan view, and it shows. Get front or top views too when the shape
+matters in those directions.
+
 `render_view` gives you the orthographic side, front or top on its own.
 Do that early: a silhouette shows proportion faults that a three-quarter
 render hides completely.
