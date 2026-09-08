@@ -3884,8 +3884,19 @@ server.registerTool(
       "  modifier     name, kind: boolean (with, mode DIFFERENCE|UNION|INTERSECT) | array (count, offset)\n" +
       "               | bevel (width, segments) | subdivide (levels) | solidify (thickness)\n" +
       "  apply_modifiers   name — bake them into the mesh, needed before booleans against the result\n" +
+      "  measure      what: bounds | overlap | gap | enclosed | counts — name, and with (the other object)\n" +
+      "  assert       the same measurements, but REQUIRED to hold; a failed assert aborts the batch unsaved\n" +
       "  material     name, material, color [r,g,b] 0-1, roughness, metallic\n" +
       "  delete / rename   name (rename also takes to)\n" +
+      "\n" +
+      "MEASURE, do not squint at the render. A picture will not tell you that a part is buried inside another " +
+      "one, that two parts pass through each other, or that a wheel floats above the ground — and all three of " +
+      "those look plausible from a distance. End a batch with asserts that state what must be true:\n" +
+      "  {op:\"assert\", what:\"enclosed\", name:\"Glass\", with:\"Body\", enclosed:false}   nothing invisible\n" +
+      "  {op:\"assert\", what:\"overlap\", name:\"Wheel\", with:\"Body\", intersects:false}  nothing interpenetrating\n" +
+      "  {op:\"assert\", what:\"bounds\", name:\"Wheel\", z_min:0, z_max:0}                 sitting on the ground\n" +
+      "A failed assert aborts before the save, so the file is never left in a state you have already been told " +
+      "is wrong — which makes asserts cheap to add and expensive to omit.\n" +
       "\n" +
       "You are good at parametric work — repeat, offset, bore, bevel, array. You are not sculpting; if the " +
       "request is organic or artistic, say so rather than approximating it with primitives.",

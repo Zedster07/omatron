@@ -223,9 +223,142 @@ def op_extrude_profile(o):
     return op_mesh({"name": o.get("name", "Profile"), "verts": verts,
                     "faces": faces, "at": o.get("at"), "shade": o.get("shade")})
 
+
+# ---------------------------------------------------------------- measuring
+#
+# Rendering and looking is a weak way to know things. The first car had a part
+# entirely inside another part, glass buried in the bodywork, and wheels
+# passing through the sill -- three faults, none of which a picture revealed
+# and all of which are one number away from obvious.
+#
+# So: measure, and let a batch assert what must be true. An assertion that
+# fails raises, and a failed operation stops the batch without saving -- which
+# means a model cannot be written in a state it has already been told is wrong.
+
+def _world_verts(ob, dg):
+    """Evaluated geometry, in world space, modifiers included."""
+    ev = ob.evaluated_get(dg)
+    me = ev.to_mesh()
+    mw = ob.matrix_world
+    try:
+        return [mw @ v.co.copy() for v in me.vertices], [p.vertices[:] for p in me.polygons]
+    finally:
+        ev.to_mesh_clear()
+
+
+def _bvh(ob, dg):
+    from mathutils.bvhtree import BVHTree
+    verts, faces = _world_verts(ob, dg)
+    return BVHTree.FromPolygons(verts, faces, all_triangles=False)
+
+
+def _bounds(ob):
+    mw = ob.matrix_world
+    pts = [mw @ mathutils.Vector(c) for c in ob.bound_box]
+    lo = [min(p[i] for p in pts) for i in range(3)]
+    hi = [max(p[i] for p in pts) for i in range(3)]
+    return lo, hi
+
+
+def _measure(o):
+    """One fact about the scene, as a number."""
+    dg = bpy.context.evaluated_depsgraph_get()
+    what = o.get("what", "bounds")
+
+    if what == "bounds":
+        lo, hi = _bounds(_obj(o["name"]))
+        return {"what": "bounds", "name": o["name"],
+                "min": [round(v, 4) for v in lo], "max": [round(v, 4) for v in hi],
+                "size": [round(hi[i] - lo[i], 4) for i in range(3)]}
+
+    if what == "overlap":
+        a, b = _obj(o["name"]), _obj(o["with"])
+        pairs = _bvh(a, dg).overlap(_bvh(b, dg))
+        return {"what": "overlap", "name": o["name"], "with": o["with"],
+                "overlapping_faces": len(pairs), "intersects": bool(pairs)}
+
+    if what == "gap":
+        # Closest approach between two surfaces. 0 means touching or crossing.
+        a, b = _obj(o["name"]), _obj(o["with"])
+        tb = _bvh(b, dg)
+        verts, _ = _world_verts(a, dg)
+        best = min((tb.find_nearest(v)[3] or 0.0) for v in verts) if verts else None
+        return {"what": "gap", "name": o["name"], "with": o["with"],
+                "gap": round(best, 4) if best is not None else None}
+
+    if what == "enclosed":
+        # Is this part entirely inside another's bounds -- i.e. invisible?
+        # The failure that produced a Skirt nobody could see.
+        alo, ahi = _bounds(_obj(o["name"]))
+        blo, bhi = _bounds(_obj(o["with"]))
+        inside = all(alo[i] >= blo[i] - 1e-6 and ahi[i] <= bhi[i] + 1e-6 for i in range(3))
+        return {"what": "enclosed", "name": o["name"], "with": o["with"], "enclosed": inside}
+
+    if what == "counts":
+        ob = _obj(o["name"])
+        verts, faces = _world_verts(ob, dg)
+        return {"what": "counts", "name": o["name"], "verts": len(verts), "faces": len(faces)}
+
+    raise ValueError(f"unknown measurement {what!r}; try bounds, overlap, gap, enclosed, counts")
+
+
+MEASURED = []
+
+
+def op_measure(o):
+    m = _measure(o)
+    MEASURED.append(m)
+    return json.dumps(m)
+
+
+def op_assert(o):
+    """Require something to be true, and stop the batch if it is not.
+
+    Stopping matters: a failed operation aborts before the save, so a model is
+    never written in a state it has already been told is wrong.
+    """
+    m = _measure(o)
+    what = m["what"]
+
+    if what == "overlap":
+        want = bool(o.get("intersects", False))
+        if m["intersects"] != want:
+            raise ValueError(
+                f"{o['name']} and {o['with']} "
+                + ("do not intersect but should" if want
+                   else f"intersect ({m['overlapping_faces']} face pairs) and should not"))
+    elif what == "enclosed":
+        want = bool(o.get("enclosed", False))
+        if m["enclosed"] != want:
+            raise ValueError(
+                f"{o['name']} is {'' if m['enclosed'] else 'not '}entirely inside {o['with']}"
+                + (" -- nothing of it can be seen" if m["enclosed"] else "")
+                + f", expected {'enclosed' if want else 'visible'}")
+    elif what == "gap":
+        g = m["gap"]
+        if "max" in o and g > float(o["max"]):
+            raise ValueError(f"{o['name']} is {g} from {o['with']}, further than {o['max']}")
+        if "min" in o and g < float(o["min"]):
+            raise ValueError(f"{o['name']} is {g} from {o['with']}, closer than {o['min']}")
+    elif what == "bounds":
+        for i, axis in enumerate("xyz"):
+            lo, hi = o.get(f"{axis}_min"), o.get(f"{axis}_max")
+            if lo is not None and m["min"][i] < float(lo) - 1e-6:
+                raise ValueError(f"{o['name']} reaches {m['min'][i]} on {axis}, below {lo}")
+            if hi is not None and m["max"][i] > float(hi) + 1e-6:
+                raise ValueError(f"{o['name']} reaches {m['max'][i]} on {axis}, above {hi}")
+    else:
+        raise ValueError(f"cannot assert on {what!r}")
+
+    MEASURED.append(m)
+    return f"ok: {json.dumps(m)}"
+
+
 OPS = {
     "add": op_add,
     "mesh": op_mesh,
+    "measure": op_measure,
+    "assert": op_assert,
     "extrude_profile": op_extrude_profile,
     "transform": op_transform,
     "modifier": op_modifier,
@@ -350,6 +483,7 @@ def main():
 
     print("OMATRON_RESULT " + json.dumps({
         "applied": done, "errors": errors, "scene": scene(), "render": render,
+        "measured": MEASURED,
     }))
 
 
