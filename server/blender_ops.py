@@ -117,8 +117,43 @@ def op_modifier(o):
         m.width = float(o.get("width", 0.1))
         m.segments = int(o.get("segments", 2))
     elif kind == "subdivide":
+        # Subdivision has rules, and breaking them produces a specific, ugly,
+        # recognisable result rather than an error. So say so at the point of
+        # use, where it can still be acted on.
         m = ob.modifiers.new(name="Subdivision", type="SUBSURF")
         m.levels = m.render_levels = int(o.get("levels", 2))
+
+        import bmesh
+        bm = bmesh.new()
+        try:
+            bm.from_mesh(ob.data)
+            ngons = sum(1 for f in bm.faces if len(f.verts) > 4)
+            tris = sum(1 for f in bm.faces if len(f.verts) == 3)
+            cage = len(bm.faces)
+            order = [x.type for x in ob.modifiers]
+        finally:
+            bm.free()
+
+        warn = []
+        if ngons:
+            warn.append(f"{ngons} ngon(s) -- these pinch and crease unpredictably under "
+                        "subdivision; booleans make them freely, so clean up after one")
+        if tris:
+            warn.append(f"{tris} triangle(s) -- these pinch too, though less than ngons")
+        if cage < 200:
+            warn.append(f"the cage is only {cage} face(s). Subdivision SMOOTHS a shape, it "
+                        "cannot invent one: too coarse a cage subdivides into a blob no "
+                        "matter how it is creased. Add resolution first")
+        if "BEVEL" in order and order.index("BEVEL") > order.index("SUBSURF"):
+            warn.append("Bevel sits AFTER Subdivision in the stack; it belongs before, or it "
+                        "bevels the already-smoothed result instead of holding its edges")
+        crease_layer = ob.data.attributes.get("crease_edge")
+        if crease_layer is None and "BEVEL" not in order:
+            warn.append("nothing is holding any edge: subdivision softens every one of them. "
+                        "Crease the edges that must stay sharp, or bevel them (1-2 segments) "
+                        "to give them support loops")
+
+        return f"{ob.name}: {m.type}" + ("  [" + "; ".join(warn) + "]" if warn else "")
     elif kind == "mirror":
         # Model one side and let the modifier own the other. The first car had
         # Wheel1..Wheel4 placed by hand, which is four chances to typo a
@@ -399,6 +434,46 @@ def _measure(o):
             bm.free()
             ev.to_mesh_clear()
 
+    if what == "silhouette":
+        # Does the model agree with the drawing? Rendered, not guessed.
+        import numpy as np
+        view = str(o.get("view", "side")).lower()
+        if view not in _VIEWS:
+            raise ValueError(f"view is one of {', '.join(_VIEWS)}")
+        ref_path = o.get("reference") or bpy.context.scene.get(f"omatron_ref_{view}")
+        if not ref_path:
+            raise ValueError(
+                f"no {view} reference. Attach one first: "
+                f'{{"op":"reference","view":"{view}","image":"/path/to/blueprint.png"}}')
+
+        shot = os.path.expanduser(str(o.get("to") or f"/tmp/omatron-cmp-{view}.png"))
+        _render_ortho(view, shot, int(o.get("resolution", 400)))
+
+        mine = bpy.data.images.load(shot, check_existing=False)
+        theirs = bpy.data.images.load(os.path.expanduser(str(ref_path)), check_existing=False)
+        try:
+            a = _normalised(_mask_from_pixels(mine.pixels[:], *mine.size))
+            b = _normalised(_mask_from_pixels(theirs.pixels[:], *theirs.size))
+        finally:
+            bpy.data.images.remove(mine)
+            bpy.data.images.remove(theirs)
+        if a is None or b is None:
+            raise ValueError("one of the two images is blank -- nothing to compare")
+
+        (ma, sa), (mb, sb) = a, b
+        inter = int((ma & mb).sum())
+        union = int((ma | mb).sum())
+        # Aspect is reported separately because it is the honest number for a
+        # LINE-ART blueprint, where overlap is meaningless -- an outline drawing
+        # has almost no filled area to overlap with a solid render. Overlap is
+        # the number to trust when the reference is a filled silhouette.
+        ar_mine, ar_ref = sa[0] / max(sa[1], 1), sb[0] / max(sb[1], 1)
+        return {"what": "silhouette", "view": view,
+                "overlap": round(inter / union, 4) if union else 0.0,
+                "aspect": round(ar_mine, 4), "reference_aspect": round(ar_ref, 4),
+                "aspect_error": round(abs(ar_mine - ar_ref) / max(ar_ref, 1e-6), 4),
+                "rendered": shot}
+
     if what == "selection":
         # What a select actually caught. Guessing at a region and then
         # extruding is how you get a change you did not intend.
@@ -459,6 +534,16 @@ def op_assert(o):
             raise ValueError(f"{o['name']} is {g} from {o['with']}, further than {o['max']}")
         if "min" in o and g < float(o["min"]):
             raise ValueError(f"{o['name']} is {g} from {o['with']}, closer than {o['min']}")
+    elif what == "silhouette":
+        if "min_overlap" in o and m["overlap"] < float(o["min_overlap"]):
+            raise ValueError(
+                f"{m['view']} silhouette overlaps the reference {int(m['overlap'] * 100)}%, "
+                f"below {int(float(o['min_overlap']) * 100)}% -- see {m['rendered']}")
+        if "max_aspect_error" in o and m["aspect_error"] > float(o["max_aspect_error"]):
+            raise ValueError(
+                f"{m['view']} view is {m['aspect']:.3f} wide-to-tall against the reference's "
+                f"{m['reference_aspect']:.3f} ({int(m['aspect_error'] * 100)}% out) -- the "
+                "proportions do not match the drawing")
     elif what == "topology":
         for key, limit in (("ngons", "max_ngons"), ("tris", "max_tris"),
                            ("non_manifold_edges", "max_non_manifold"),
@@ -767,11 +852,168 @@ def op_delete_faces(o):
     return f"{ob.name}: deleted {len(sel)} face(s)"
 
 
+# ------------------------------------------------------ working from a blueprint
+#
+# Proportions were right on the last car by luck: I picked numbers, and they
+# happened to land near a real hatchback. Form was not, because there was
+# nothing to check form AGAINST. A modeller works over orthographic blueprints
+# -- side, front, top -- and every judgement is "does this match the drawing".
+#
+# So: attach reference images, render matching orthographic views, and compare
+# the silhouettes as a number.
+#
+# The comparison normalises both outlines to their own bounding boxes before
+# overlapping them, which makes it scale-invariant on purpose: a blueprint
+# arrives at whatever size it was drawn, and what matters is whether the SHAPE
+# agrees, not whether someone scaled the scan to metres.
+
+# The vector is the direction the camera LOOKS, which must agree with the
+# rotation beside it -- a camera at (0,0,0) looks down -Z, and each rotation
+# below turns that onto the axis named. Storing "where the camera sits" instead
+# put the side camera on the far side of the model, pointing away from it, and
+# rendered a blank frame that looked exactly like a model that had failed to
+# load.
+_VIEWS = {
+    # view     look direction   rotation (rad)                   width axis, height axis
+    "side":  ((0, 1, 0), (math.pi / 2, 0, 0), 0, 2),
+    "front": ((-1, 0, 0), (math.pi / 2, 0, math.pi / 2), 1, 2),
+    "top":   ((0, 0, -1), (0, 0, 0), 0, 1),
+}
+
+
+def op_reference(o):
+    """Attach a blueprint to a view, and show it in the viewport.
+
+    Stored on the scene so it survives the save: the next batch, in a new
+    Blender, still knows what this model is supposed to look like.
+    """
+    view = str(o.get("view", "side")).lower()
+    if view not in _VIEWS:
+        raise ValueError(f"view is one of {', '.join(_VIEWS)}")
+    path = os.path.expanduser(str(o["image"]))
+    if not os.path.exists(path):
+        raise ValueError(f"no such reference image: {path}")
+
+    bpy.context.scene[f"omatron_ref_{view}"] = path
+
+    # A visible plate in the viewport, so the person watching sees the drawing
+    # the model is being fitted to. Behind the model, and never rendered.
+    name = f"Reference_{view}"
+    old = bpy.data.objects.get(name)
+    if old:
+        bpy.data.objects.remove(old, do_unlink=True)
+    try:
+        img = bpy.data.images.load(path, check_existing=True)
+        empty = bpy.data.objects.new(name, None)
+        empty.empty_display_type = "IMAGE"
+        empty.data = img
+        empty.empty_display_size = float(o.get("size", 4.0))
+        empty.rotation_euler = _VIEWS[view][1]
+        empty.location = _vec(o.get("at"))
+        empty.hide_render = True
+        bpy.context.scene.collection.objects.link(empty)
+    except Exception:
+        # The plate is a convenience. If this Blender will not take an image
+        # empty, the reference is still recorded and still comparable.
+        pass
+    return f"{view}: {os.path.basename(path)}"
+
+
+def _mask_from_pixels(px, w, h):
+    """A boolean silhouette. Alpha where there is any, ink-vs-paper otherwise.
+
+    Decided from the image rather than declared by the caller: a transparent
+    PNG blueprint and our own render both want the alpha channel, and a flat
+    scan wants the ink. Testing max() > 0 was wrong -- every image has at least
+    one opaque pixel, so it never once fell through to the ink path.
+    """
+    import numpy as np
+    a = np.array(px, dtype="float32").reshape(h, w, 4)
+    if a[:, :, 3].min() < 0.5:            # genuinely transparent somewhere
+        return a[:, :, 3] > 0.5
+    lum = a[:, :, :3].mean(axis=2)
+    # A blueprint is dark on light far more often than the reverse; decide by
+    # which way round this one is rather than assuming.
+    ink = lum < 0.5
+    return ink if ink.mean() < 0.5 else ~ink
+
+
+def _normalised(mask, grid=128):
+    """Crop to the outline's own box, then resample to a fixed grid.
+
+    Scale-invariant by construction: a drawing scanned at any size and a render
+    at any distance both become the same 128x128 question about shape.
+    """
+    import numpy as np
+    rows = np.where(mask.any(axis=1))[0]
+    cols = np.where(mask.any(axis=0))[0]
+    if not len(rows) or not len(cols):
+        return None
+    sub = mask[rows[0]:rows[-1] + 1, cols[0]:cols[-1] + 1]
+    ys = (np.linspace(0, sub.shape[0] - 1, grid)).astype("int32")
+    xs = (np.linspace(0, sub.shape[1] - 1, grid)).astype("int32")
+    return sub[ys][:, xs], (len(cols), len(rows))
+
+
+def _render_ortho(view, path, res=400):
+    """One orthographic view of the model, framed on the model, alpha only."""
+    lo, hi = None, None
+    dg = bpy.context.evaluated_depsgraph_get()
+    for ob in bpy.data.objects:
+        if ob.type != "MESH" or ob.hide_render:
+            continue
+        a, b = _bounds(ob, dg)
+        lo = a if lo is None else [min(lo[i], a[i]) for i in range(3)]
+        hi = b if hi is None else [max(hi[i], b[i]) for i in range(3)]
+    if lo is None:
+        raise ValueError("nothing to render")
+
+    centre = [(lo[i] + hi[i]) / 2 for i in range(3)]
+    span = max(hi[i] - lo[i] for i in range(3)) or 1.0
+    direction, rot, _, _ = _VIEWS[view]
+
+    cam_data = bpy.data.cameras.new("OmatronOrtho")
+    cam_data.type = "ORTHO"
+    cam_data.ortho_scale = span * 1.15
+    cam = bpy.data.objects.new("OmatronOrtho", cam_data)
+    bpy.context.scene.collection.objects.link(cam)
+    cam.location = [centre[i] - direction[i] * span * 4 for i in range(3)]   # behind the look
+    cam.rotation_euler = rot
+
+    sc = bpy.context.scene
+    keep = (sc.camera, sc.render.filepath, sc.render.resolution_x,
+            sc.render.resolution_y, sc.render.film_transparent)
+    try:
+        sc.camera = cam
+        sc.render.resolution_x = sc.render.resolution_y = res
+        sc.render.film_transparent = True          # alpha IS the silhouette
+        sc.render.image_settings.color_mode = "RGBA"
+        sc.render.filepath = path
+        bpy.ops.render.render(write_still=True)
+    finally:
+        (sc.camera, sc.render.filepath, sc.render.resolution_x,
+         sc.render.resolution_y, sc.render.film_transparent) = keep
+        bpy.data.objects.remove(cam, do_unlink=True)
+    return path
+
+
+def op_render_view(o):
+    """An orthographic side, front or top view -- the drawing, from the model."""
+    view = str(o.get("view", "side")).lower()
+    if view not in _VIEWS:
+        raise ValueError(f"view is one of {', '.join(_VIEWS)}")
+    out = os.path.expanduser(str(o.get("to") or f"/tmp/omatron-{view}.png"))
+    _render_ortho(view, out, int(o.get("resolution", 400)))
+    return f"{view} view -> {out}"
+
+
 OPS = {
     "add": op_add,
     "mesh": op_mesh,
     "shade": op_shade,
     "normals": op_normals,
+    "reference": op_reference,
+    "render_view": op_render_view,
     "select": op_select,
     "crease": op_crease,
     "inset": op_inset,

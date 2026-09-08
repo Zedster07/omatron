@@ -104,7 +104,48 @@ you did not place the vertex, and it changes the moment anything is inset. When
 a selection comes back empty the error names the filter that emptied it —
 region or normal — so read it rather than guessing which to widen.
 
-## Subdivision needs a cage dense enough to subdivide
+## The rules of subdivision
+
+Subdivision is not a smoothing button. It has rules, and breaking them produces
+a specific ugly result rather than an error, which is why it is so easy to use
+it wrongly for a long time.
+
+**It softens every edge, without exception.** Two things stop that, and you must
+use one of them deliberately:
+
+- **Support loops** (also called holding edges): extra loops running parallel
+  to an edge, close to it. The closer the loop, the tighter and sharper the
+  edge. This is the production method — it lives in the geometry, so it
+  survives export and bakes correctly.
+- **Creases**: a 0–1 weight on the edge. Cheap and non-destructive, but not
+  every exporter and engine respects them, and at 1.0 they can look
+  artificially perfect.
+
+The practical way to add support loops is **a small bevel**: `bevel_edges` with
+1–2 segments puts a loop on each side of the edge automatically. Bevel, then
+subdivide.
+
+**Order in the modifier stack is not cosmetic.** It is:
+
+    Mirror -> Array -> Boolean -> Solidify -> Bevel -> Subdivision -> Weighted Normal
+
+Bevel after Subdivision bevels the already-smoothed result instead of holding
+its edges. Boolean after Subdivision cuts into dense geometry and leaves a mess.
+
+**Subdivision demands quads.** Ngons pinch and crease unpredictably;
+triangles pinch less but still pinch. Booleans emit ngons freely, so check
+after every one — `{op:"assert", what:"topology", max_ngons:0}` — and clean up
+before subdividing.
+
+**Poles pinch on curved surfaces.** A vertex where three or five-plus edges
+meet distorts the surface around it. Keep poles in flat regions, off the
+panels you want smooth.
+
+**Subdivision smooths a shape; it cannot invent one.** This is the rule that
+matters most and the one that is easiest to miss, because the result looks
+"soft" rather than "wrong".
+
+## A cage dense enough to subdivide
 
 The limit this hit, recorded so it is not hit again: a body lofted from 10
 cross-sections of 5 points is 36 quads, and **36 quads is not enough geometry
@@ -117,6 +158,34 @@ form needs: more stations along the length, more points per section, and
 `loop_cut` for support loops beside the edges that must stay crisp. Resolution
 first, then creases, then detail. Detail on a coarse cage is worse than no
 detail, because it destroys the silhouette that was working.
+
+## Work from a blueprint
+
+Proportions guessed are proportions wrong, eventually. Attach reference
+drawings and check against them:
+
+    {op:"reference", view:"side",  image:"~/ref/hatch-side.png"}
+    {op:"measure",   what:"silhouette", view:"side"}
+    {op:"assert",    what:"silhouette", view:"side",
+                     min_overlap:0.85, max_aspect_error:0.05}
+
+`reference` attaches the drawing to a view and shows it in the viewport, so
+whoever is watching sees what the model is being fitted to. `silhouette`
+renders that orthographic view and compares outlines, returning two numbers:
+
+- **overlap** — how much of the two outlines coincide. Trust this when the
+  reference is a filled silhouette.
+- **aspect_error** — how far the width-to-height ratio is from the drawing's.
+  Trust this for a line-art blueprint, where overlap means little: an outline
+  drawing has almost no filled area to overlap with a solid render.
+
+Both are computed after normalising each outline to its own bounding box, so a
+drawing scanned at any size compares correctly against a render at any
+distance. It asks about shape, not scale.
+
+`render_view` gives you the orthographic side, front or top on its own.
+Do that early: a silhouette shows proportion faults that a three-quarter
+render hides completely.
 
 ## Measure. Do not squint at the render
 

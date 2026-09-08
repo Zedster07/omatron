@@ -3888,6 +3888,9 @@ server.registerTool(
       "  shade        name, smooth true|false, angle_deg — smooth above the angle, sharp below it\n" +
       "  normals      name — recalculate outward. ALWAYS do this after building a mesh by hand;\n" +
       "               a face wound the wrong way shades as a hole\n" +
+      "  reference    view side|front|top, image — attach a blueprint and show it in the viewport\n" +
+      "  render_view  view, to — an orthographic view; a silhouette shows proportion faults a\n" +
+      "               three-quarter render hides\n" +
       "  select       name, plus region [x0,y0,z0,x1,y1,z1] | normal +x|-x|+y|-y|+z|-z with tol\n" +
       "               | sharper_than degrees; elements faces|edges|both. Selection persists across\n" +
       "               the ops below. An empty selection is an error, never a silent no-op\n" +
@@ -3898,7 +3901,8 @@ server.registerTool(
       "  loop_cut     cuts — support loops through the selected edges\n" +
       "  delete_faces the selection\n" +
       "  apply_modifiers   name — bake them into the mesh, needed before booleans against the result\n" +
-      "  measure      what: bounds | overlap | gap | enclosed | topology | counts — name, and with\n" +
+      "  measure      what: bounds | overlap | gap | enclosed | topology | silhouette | selection\n" +
+      "               | counts — name, and with (or view, for silhouette)\n" +
       "  assert       the same measurements, but REQUIRED to hold; a failed assert aborts the batch unsaved\n" +
       "  material     name, material, color [r,g,b] 0-1, roughness, metallic\n" +
       "  delete / rename   name (rename also takes to)\n" +
@@ -3920,6 +3924,13 @@ server.registerTool(
       "of what makes a render look modelled. Then shade smooth with an angle so curved faces read curved and " +
       "creases stay crisp. Keep quads: {op:\"assert\", what:\"topology\", name:\"Body\", max_ngons:0} — ngons " +
       "shade unpredictably and subdivide badly, and booleans produce them freely, so check after every one.\n" +
+      "\n" +
+      "SUBDIVISION HAS RULES. It softens EVERY edge; a crease or a 1-2 segment bevel (support loops) is what " +
+      "holds the ones that must stay sharp. Stack order is Mirror, Array, Boolean, Solidify, Bevel, " +
+      "Subdivision, Weighted Normal — bevel after subdivision bevels the smoothed result instead of holding " +
+      "its edges. It needs quads. And it SMOOTHS a shape rather than inventing one, so a coarse cage " +
+      "subdivides into a blob however it is creased: add resolution first. The subdivide op will tell you " +
+      "which of these you have broken — read what it returns.\n" +
       "\n" +
       "You are good at parametric work — repeat, offset, bore, bevel, array. You are not sculpting; if the " +
       "request is organic or artistic, say so rather than approximating it with primitives.",
