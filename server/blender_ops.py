@@ -333,12 +333,33 @@ def _measure(o):
                 "gap": round(best, 4) if best is not None else None}
 
     if what == "enclosed":
-        # Is this part entirely inside another's bounds -- i.e. invisible?
-        # The failure that produced a Skirt nobody could see.
-        alo, ahi = _bounds(_obj(o["name"]), dg)
-        blo, bhi = _bounds(_obj(o["with"]), dg)
-        inside = all(alo[i] >= blo[i] - 1e-6 and ahi[i] <= bhi[i] + 1e-6 for i in range(3))
-        return {"what": "enclosed", "name": o["name"], "with": o["with"], "enclosed": inside}
+        # Is this part entirely inside another -- i.e. invisible? The failure
+        # that produced a Skirt nobody could see, and glass buried in bodywork.
+        #
+        # Bounding boxes cannot answer this. A windscreen sits inside the car's
+        # overall box while protruding through the roof surface, and a bbox
+        # test calls that "enclosed" and blocks a perfectly good model. What
+        # matters is the SURFACE: is every vertex of A inside B's volume?
+        #
+        # Ray parity gives that: fire a ray from each vertex and count how many
+        # times it crosses B. Odd means it started inside.
+        a, b = _obj(o["name"]), _obj(o["with"])
+        tb = _bvh(b, dg)
+        verts, _ = _world_verts(a, dg)
+        d = mathutils.Vector((0.5773, 0.5774, 0.5775)).normalized()  # nothing axis-aligned
+        outside = 0
+        for v in verts:
+            origin, hits = v.copy(), 0
+            while hits < 64:
+                loc = tb.ray_cast(origin + d * 1e-5, d)[0]
+                if loc is None:
+                    break
+                hits += 1
+                origin = loc
+            if hits % 2 == 0:
+                outside += 1
+        return {"what": "enclosed", "name": o["name"], "with": o["with"],
+                "enclosed": outside == 0, "verts_outside": outside, "verts": len(verts)}
 
     if what == "topology":
         # Placement checks catch a part in the wrong place. These catch a mesh
@@ -358,13 +379,22 @@ def _measure(o):
                 if n == 3: tris += 1
                 elif n == 4: quads += 1
                 else: ngons += 1
-            nonmanifold = sum(1 for e in bm.edges if not e.is_manifold)
+            # Two different conditions, and conflating them makes the check
+            # useless. An edge with one face is a BOUNDARY -- an open edge,
+            # which is exactly what a half-mesh awaiting a mirror has along
+            # its centreline, and entirely correct there. An edge with three
+            # or more is genuinely non-manifold and will break booleans and
+            # solidify. bmesh's is_manifold reports both as False, so a
+            # perfectly good half-body failed a check it should have passed.
+            boundary = sum(1 for e in bm.edges if len(e.link_faces) == 1)
+            nonmanifold = sum(1 for e in bm.edges if len(e.link_faces) > 2)
             loose = sum(1 for v in bm.verts if not v.link_edges)
             total = tris + quads + ngons
             return {"what": "topology", "name": o["name"],
                     "quads": quads, "tris": tris, "ngons": ngons,
                     "quad_ratio": round(quads / total, 3) if total else 0.0,
-                    "non_manifold_edges": nonmanifold, "loose_verts": loose}
+                    "non_manifold_edges": nonmanifold, "boundary_edges": boundary,
+                    "loose_verts": loose}
         finally:
             bm.free()
             ev.to_mesh_clear()
@@ -418,6 +448,7 @@ def op_assert(o):
     elif what == "topology":
         for key, limit in (("ngons", "max_ngons"), ("tris", "max_tris"),
                            ("non_manifold_edges", "max_non_manifold"),
+                           ("boundary_edges", "max_boundary"),
                            ("loose_verts", "max_loose_verts")):
             if limit in o and m[key] > int(o[limit]):
                 raise ValueError(f"{o['name']} has {m[key]} {key.replace('_', ' ')}, more than {o[limit]}")
@@ -462,10 +493,35 @@ def op_shade(o):
     return f"{ob.name}: {'smooth' if o.get('smooth', True) else 'flat'}"
 
 
+def op_normals(o):
+    """Point every face outward.
+
+    A mesh built from explicit vertices has whatever winding the caller
+    happened to write, and a face wound the wrong way shades as a hole. This is
+    the "recalculate outside" every modeller reaches for after building
+    geometry by hand, and there is no way to get it right by guessing at vertex
+    order instead.
+    """
+    import bmesh
+    ob = _obj(o["name"])
+    bm = bmesh.new()
+    try:
+        bm.from_mesh(ob.data)
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+        if o.get("flip"):
+            bmesh.ops.reverse_faces(bm, faces=bm.faces)
+        bm.to_mesh(ob.data)
+        ob.data.update()
+        return f"{ob.name}: {len(bm.faces)} faces reoriented"
+    finally:
+        bm.free()
+
+
 OPS = {
     "add": op_add,
     "mesh": op_mesh,
     "shade": op_shade,
+    "normals": op_normals,
     "measure": op_measure,
     "assert": op_assert,
     "extrude_profile": op_extrude_profile,

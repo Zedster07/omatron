@@ -3886,6 +3886,8 @@ server.registerTool(
       "               | mirror (axis x|y|z or a list; reflects about the WORLD origin, so model one\n" +
       "                 side and let it own the other) | weighted_normal (makes bevels read correctly)\n" +
       "  shade        name, smooth true|false, angle_deg — smooth above the angle, sharp below it\n" +
+      "  normals      name — recalculate outward. ALWAYS do this after building a mesh by hand;\n" +
+      "               a face wound the wrong way shades as a hole\n" +
       "  apply_modifiers   name — bake them into the mesh, needed before booleans against the result\n" +
       "  measure      what: bounds | overlap | gap | enclosed | topology | counts — name, and with\n" +
       "  assert       the same measurements, but REQUIRED to hold; a failed assert aborts the batch unsaved\n" +

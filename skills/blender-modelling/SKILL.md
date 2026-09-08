@@ -95,6 +95,25 @@ assertions that say what must be true. They cost one line and they are the only
 thing standing between you and confidently shipping a car whose windows are
 inside the bodywork.
 
+## Build by hand, then fix the normals
+
+A mesh from explicit vertices has whatever winding you happened to write, and a
+face wound the wrong way shades as a hole. Follow every `mesh` with
+`{op: "normals", name: "..."}`. There is no getting this right by being careful
+about vertex order.
+
+## What an assertion does and does not tell you
+
+`enclosed` asks whether every vertex of one part lies inside another's volume —
+a real containment test, not a bounding-box one, so a windscreen that sits
+inside the car's overall box while protruding through the roof reads correctly
+as visible.
+
+But an assertion only checks what you asked. Headlamps that passed
+`enclosed: false` were plainly visible and plainly in the wrong place, sitting
+on the bonnet rather than the nose. Visible is not correct. Use `bounds` to
+pin down where a part should actually be when position is what matters.
+
 ## What you are not
 
 You are not sculpting. Organic and artistic forms — a face, a tree, drapery —
