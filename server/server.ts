@@ -3883,8 +3883,11 @@ server.registerTool(
       "  transform    name, plus at [x,y,z] or move_by [x,y,z], rotation_deg, scale (number or [x,y,z])\n" +
       "  modifier     name, kind: boolean (with, mode DIFFERENCE|UNION|INTERSECT) | array (count, offset)\n" +
       "               | bevel (width, segments) | subdivide (levels) | solidify (thickness)\n" +
+      "               | mirror (axis x|y|z or a list; reflects about the WORLD origin, so model one\n" +
+      "                 side and let it own the other) | weighted_normal (makes bevels read correctly)\n" +
+      "  shade        name, smooth true|false, angle_deg — smooth above the angle, sharp below it\n" +
       "  apply_modifiers   name — bake them into the mesh, needed before booleans against the result\n" +
-      "  measure      what: bounds | overlap | gap | enclosed | counts — name, and with (the other object)\n" +
+      "  measure      what: bounds | overlap | gap | enclosed | topology | counts — name, and with\n" +
       "  assert       the same measurements, but REQUIRED to hold; a failed assert aborts the batch unsaved\n" +
       "  material     name, material, color [r,g,b] 0-1, roughness, metallic\n" +
       "  delete / rename   name (rename also takes to)\n" +
@@ -3897,6 +3900,15 @@ server.registerTool(
       "  {op:\"assert\", what:\"bounds\", name:\"Wheel\", z_min:0, z_max:0}                 sitting on the ground\n" +
       "A failed assert aborts before the save, so the file is never left in a state you have already been told " +
       "is wrong — which makes asserts cheap to add and expensive to omit.\n" +
+      "\n" +
+      "BUILD LIKE A MODELLER, not by stacking primitives. Big shapes first, then medium, then small — a form " +
+      "assembled from whole cubes and cylinders reads as assembled from whole cubes and cylinders. Prefer one " +
+      "mesh whose silhouette you defined (op mesh, from vertices) over five primitives pushed together. " +
+      "Mirror for anything symmetric rather than placing both halves. Bevel every edge that would exist in " +
+      "metal or plastic — real objects have no perfectly sharp edges, and a bevel catching a highlight is most " +
+      "of what makes a render look modelled. Then shade smooth with an angle so curved faces read curved and " +
+      "creases stay crisp. Keep quads: {op:\"assert\", what:\"topology\", name:\"Body\", max_ngons:0} — ngons " +
+      "shade unpredictably and subdivide badly, and booleans produce them freely, so check after every one.\n" +
       "\n" +
       "You are good at parametric work — repeat, offset, bore, bevel, array. You are not sculpting; if the " +
       "request is organic or artistic, say so rather than approximating it with primitives.",

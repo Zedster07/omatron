@@ -119,6 +119,42 @@ def op_modifier(o):
     elif kind == "subdivide":
         m = ob.modifiers.new(name="Subdivision", type="SUBSURF")
         m.levels = m.render_levels = int(o.get("levels", 2))
+    elif kind == "mirror":
+        # Model one side and let the modifier own the other. The first car had
+        # Wheel1..Wheel4 placed by hand, which is four chances to typo a
+        # coordinate and no guarantee the halves match. A mirror cannot drift.
+        m = ob.modifiers.new(name="Mirror", type="MIRROR")
+        axes = o.get("axis", "x")
+        axes = axes if isinstance(axes, (list, tuple)) else [axes]
+        m.use_axis = tuple("xyz"[i] in [str(a).lower() for a in axes] for i in range(3))
+        m.use_clip = bool(o.get("clip", True))
+
+        # Mirror about the WORLD origin by default, not the object's own.
+        #
+        # Blender's default is the object origin, and every part this API
+        # creates is placed by setting location -- so a wheel added at x=1.36
+        # has a mesh symmetric about its own origin, and mirroring it produces
+        # exactly nothing. Silently. That is the array-with-zero-offset trap
+        # again: an operation that reports success and changes no geometry.
+        #
+        # "Mirror the wheel" means "put one on the other side", so that is what
+        # it does. Pass `about` to mirror around some other object instead.
+        if o.get("about"):
+            m.mirror_object = _obj(o["about"])
+        else:
+            origin = bpy.data.objects.get("MirrorOrigin")
+            if origin is None:
+                origin = bpy.data.objects.new("MirrorOrigin", None)
+                origin.empty_display_size = 0.01
+                bpy.context.scene.collection.objects.link(origin)
+                origin.hide_render = True
+            m.mirror_object = origin
+    elif kind == "weighted_normal":
+        # Makes bevelled edges read correctly instead of smearing shading
+        # across the face they belong to.
+        ob.data.use_auto_smooth = True if hasattr(ob.data, "use_auto_smooth") else None
+        m = ob.modifiers.new(name="WeightedNormal", type="WEIGHTED_NORMAL")
+        m.keep_sharp = True
     elif kind == "solidify":
         m = ob.modifiers.new(name="Solidify", type="SOLIDIFY")
         m.thickness = float(o.get("thickness", 0.1))
@@ -252,12 +288,22 @@ def _bvh(ob, dg):
     return BVHTree.FromPolygons(verts, faces, all_triangles=False)
 
 
-def _bounds(ob):
-    mw = ob.matrix_world
-    pts = [mw @ mathutils.Vector(c) for c in ob.bound_box]
-    lo = [min(p[i] for p in pts) for i in range(3)]
-    hi = [max(p[i] for p in pts) for i in range(3)]
-    return lo, hi
+def _bounds(ob, dg):
+    """World-space extent of what is actually THERE.
+
+    Not ob.bound_box: that is the base mesh, before modifiers. A mirrored part
+    reported the bounds of its unmirrored half, so an assert about how far the
+    object reached passed on a number describing half of it -- a check that
+    confirms the wrong thing is worse than no check.
+    """
+    verts, _ = _world_verts(ob, dg)
+    if not verts:
+        mw = ob.matrix_world
+        pts = [mw @ mathutils.Vector(c) for c in ob.bound_box]
+        return ([min(p[i] for p in pts) for i in range(3)],
+                [max(p[i] for p in pts) for i in range(3)])
+    return ([min(v[i] for v in verts) for i in range(3)],
+            [max(v[i] for v in verts) for i in range(3)])
 
 
 def _measure(o):
@@ -266,7 +312,7 @@ def _measure(o):
     what = o.get("what", "bounds")
 
     if what == "bounds":
-        lo, hi = _bounds(_obj(o["name"]))
+        lo, hi = _bounds(_obj(o["name"]), dg)
         return {"what": "bounds", "name": o["name"],
                 "min": [round(v, 4) for v in lo], "max": [round(v, 4) for v in hi],
                 "size": [round(hi[i] - lo[i], 4) for i in range(3)]}
@@ -289,10 +335,39 @@ def _measure(o):
     if what == "enclosed":
         # Is this part entirely inside another's bounds -- i.e. invisible?
         # The failure that produced a Skirt nobody could see.
-        alo, ahi = _bounds(_obj(o["name"]))
-        blo, bhi = _bounds(_obj(o["with"]))
+        alo, ahi = _bounds(_obj(o["name"]), dg)
+        blo, bhi = _bounds(_obj(o["with"]), dg)
         inside = all(alo[i] >= blo[i] - 1e-6 and ahi[i] <= bhi[i] + 1e-6 for i in range(3))
         return {"what": "enclosed", "name": o["name"], "with": o["with"], "enclosed": inside}
+
+    if what == "topology":
+        # Placement checks catch a part in the wrong place. These catch a mesh
+        # that is built wrong -- which is what "it looks like stacked
+        # primitives" actually means underneath. Ngons shade unpredictably and
+        # subdivide badly; non-manifold edges break booleans and solidify.
+        import bmesh
+        ob = _obj(o["name"])
+        bm = bmesh.new()
+        ev = ob.evaluated_get(dg)
+        me = ev.to_mesh()
+        try:
+            bm.from_mesh(me)
+            tris = quads = ngons = 0
+            for f in bm.faces:
+                n = len(f.verts)
+                if n == 3: tris += 1
+                elif n == 4: quads += 1
+                else: ngons += 1
+            nonmanifold = sum(1 for e in bm.edges if not e.is_manifold)
+            loose = sum(1 for v in bm.verts if not v.link_edges)
+            total = tris + quads + ngons
+            return {"what": "topology", "name": o["name"],
+                    "quads": quads, "tris": tris, "ngons": ngons,
+                    "quad_ratio": round(quads / total, 3) if total else 0.0,
+                    "non_manifold_edges": nonmanifold, "loose_verts": loose}
+        finally:
+            bm.free()
+            ev.to_mesh_clear()
 
     if what == "counts":
         ob = _obj(o["name"])
@@ -340,6 +415,16 @@ def op_assert(o):
             raise ValueError(f"{o['name']} is {g} from {o['with']}, further than {o['max']}")
         if "min" in o and g < float(o["min"]):
             raise ValueError(f"{o['name']} is {g} from {o['with']}, closer than {o['min']}")
+    elif what == "topology":
+        for key, limit in (("ngons", "max_ngons"), ("tris", "max_tris"),
+                           ("non_manifold_edges", "max_non_manifold"),
+                           ("loose_verts", "max_loose_verts")):
+            if limit in o and m[key] > int(o[limit]):
+                raise ValueError(f"{o['name']} has {m[key]} {key.replace('_', ' ')}, more than {o[limit]}")
+        if "min_quad_ratio" in o and m["quad_ratio"] < float(o["min_quad_ratio"]):
+            raise ValueError(
+                f"{o['name']} is {int(m['quad_ratio'] * 100)}% quads, below "
+                f"{int(float(o['min_quad_ratio']) * 100)}% -- it will subdivide and shade badly")
     elif what == "bounds":
         for i, axis in enumerate("xyz"):
             lo, hi = o.get(f"{axis}_min"), o.get(f"{axis}_max")
@@ -354,9 +439,33 @@ def op_assert(o):
     return f"ok: {json.dumps(m)}"
 
 
+def op_shade(o):
+    """Smooth or flat shading, optionally by angle.
+
+    A low-poly form shaded flat reads as facets; the same mesh smoothed above
+    an angle reads as a curved body with crisp edges where the edges are sharp.
+    It is the cheapest quality change available and it is not modelling at all.
+    """
+    ob = _obj(o["name"])
+    for p in ob.data.polygons:
+        p.use_smooth = o.get("smooth", True)
+    angle = o.get("angle_deg")
+    if angle is not None and o.get("smooth", True):
+        bpy.context.view_layer.objects.active = ob
+        try:
+            bpy.ops.object.shade_auto_smooth(angle=math.radians(float(angle)))
+        except (AttributeError, RuntimeError):
+            # Older Blender kept this as a mesh flag rather than a modifier.
+            if hasattr(ob.data, "use_auto_smooth"):
+                ob.data.use_auto_smooth = True
+                ob.data.auto_smooth_angle = math.radians(float(angle))
+    return f"{ob.name}: {'smooth' if o.get('smooth', True) else 'flat'}"
+
+
 OPS = {
     "add": op_add,
     "mesh": op_mesh,
+    "shade": op_shade,
     "measure": op_measure,
     "assert": op_assert,
     "extrude_profile": op_extrude_profile,
@@ -423,11 +532,14 @@ def _stage():
     # model is not off the edge and a small one is not a dot.
     meshes = [o for o in bpy.data.objects if o.type == "MESH"]
     if meshes:
+        # Evaluated bounds, for the same reason the measure op uses them: a
+        # mirrored or arrayed model has a base mesh far smaller than the thing
+        # on screen, and framing on the base mesh crops the render.
+        dg = bpy.context.evaluated_depsgraph_get()
         xs, ys, zs = [], [], []
         for o in meshes:
-            for c in o.bound_box:
-                w = o.matrix_world @ mathutils.Vector(c)
-                xs.append(w.x); ys.append(w.y); zs.append(w.z)
+            lo, hi = _bounds(o, dg)
+            xs += [lo[0], hi[0]]; ys += [lo[1], hi[1]]; zs += [lo[2], hi[2]]
         cx, cy, cz = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2, (min(zs) + max(zs)) / 2
         span = max(max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs), 1.0)
         d = span * 2.2
