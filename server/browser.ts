@@ -166,8 +166,22 @@ async function adopt(): Promise<number | null> {
   if (!port) return null
 
   try {
+    // A version response is not proof of a usable browser.
+    //
+    // A half-dead Chromium -- one whose window is gone but whose processes are
+    // still holding the profile -- answers /json/version perfectly happily.
+    // Adopting it produced a session with no window at all, where every call
+    // died as "CDP Page.navigate timed out after 15s". Reproduced three times
+    // while testing something else, each time after killing a browser badly.
+    //
+    // So: require a page to actually drive. That is the thing adoption is for,
+    // and a browser with none is a corpse holding a lock.
     const r = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1500) })
     if (!r.ok) return null
+    const listed = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(1500) })
+    if (!listed.ok) return null
+    const targets = (await listed.json()) as Array<{ type?: string; webSocketDebuggerUrl?: string }>
+    if (!targets.some((t) => t.type === "page" && t.webSocketDebuggerUrl)) return null
   } catch {
     return null
   }
@@ -188,6 +202,22 @@ export async function ensure(opts: { command?: string; headless?: boolean } = {}
   const bin = browserBinary(opts.command)
   await fs.mkdir(PROFILE_DIR, { recursive: true, mode: 0o700 })
   await fs.chmod(BROWSER_DIR, 0o700).catch(() => {})
+
+  // A stale lock from a browser that died badly stops Chromium starting at all,
+  // and the error it gives ("exited immediately") names nothing useful. If
+  // adopt() just declined the profile, nothing is holding it and the lock is
+  // a leftover.
+  try {
+    const link = await fs.readlink(path.join(PROFILE_DIR, "SingletonLock"))
+    const stalePid = Number(link.split("-").pop())
+    if (Number.isFinite(stalePid)) {
+      try { process.kill(stalePid, 0) } catch {
+        for (const f of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) {
+          await fs.rm(path.join(PROFILE_DIR, f), { force: true }).catch(() => {})
+        }
+      }
+    }
+  } catch {}
 
   const port = await freePort()
   const args = [
