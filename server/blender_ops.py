@@ -219,22 +219,85 @@ def op_rename(o):
     return ob.name
 
 
+# Named materials, because "roughness 0.3, metallic 0.5" is not a car's paint.
+#
+# Most of whether a render reads as convincing is shading, not geometry. The
+# same body lit and shaded properly looks like a product; flat, it looks like a
+# grey blob -- demonstrated on the same mesh in one session. These are the
+# handful of surfaces this tool is actually asked for, with the parameters that
+# make each read correctly, rather than four sliders and good luck.
+FINISHES = {
+    #                base color            rough  metal  coat  transmission
+    "paint":        ((0.42, 0.06, 0.08),   0.28,  0.45,  0.75, 0.0),
+    "matte_paint":  ((0.30, 0.31, 0.34),   0.62,  0.10,  0.00, 0.0),
+    "rubber":       ((0.021, 0.021, 0.024), 0.92, 0.00,  0.00, 0.0),
+    "glass":        ((0.86, 0.90, 0.93),   0.03,  0.00,  0.20, 0.92),
+    "tinted_glass": ((0.10, 0.13, 0.16),   0.05,  0.00,  0.25, 0.62),
+    "chrome":       ((0.92, 0.93, 0.95),   0.04,  1.00,  0.00, 0.0),
+    "alloy":        ((0.70, 0.71, 0.74),   0.22,  1.00,  0.00, 0.0),
+    "brushed":      ((0.62, 0.63, 0.66),   0.38,  1.00,  0.00, 0.0),
+    "plastic":      ((0.08, 0.08, 0.09),   0.48,  0.00,  0.05, 0.0),
+    "lens":         ((0.90, 0.92, 0.96),   0.05,  0.10,  0.60, 0.55),
+    "steel":        ((0.55, 0.56, 0.58),   0.30,  1.00,  0.00, 0.0),
+}
+
+
 def op_material(o):
     ob = _obj(o["name"])
     mat = bpy.data.materials.new(name=o.get("material", "Material"))
     mat.use_nodes = True
-    c = o.get("color", [0.8, 0.8, 0.8])
     bsdf = mat.node_tree.nodes.get("Principled BSDF")
+
+    finish = str(o.get("finish", "")).lower()
+    if finish and finish not in FINISHES:
+        raise ValueError(f"unknown finish {finish!r}; try {', '.join(sorted(FINISHES))}")
+    if finish:
+        base, rough, metal, coat, trans = FINISHES[finish]
+    else:
+        base, rough, metal, coat, trans = (0.8, 0.8, 0.8), 0.5, 0.0, 0.0, 0.0
+
+    c = o.get("color", base)                       # colour overrides the preset's
     if bsdf:
         bsdf.inputs["Base Color"].default_value = (float(c[0]), float(c[1]), float(c[2]), 1.0)
-        if "roughness" in o:
-            bsdf.inputs["Roughness"].default_value = float(o["roughness"])
-        if "metallic" in o:
-            bsdf.inputs["Metallic"].default_value = float(o["metallic"])
+        bsdf.inputs["Roughness"].default_value = float(o.get("roughness", rough))
+        bsdf.inputs["Metallic"].default_value = float(o.get("metallic", metal))
+        # Input names moved between Blender versions, and a missing one is a
+        # silent no-op rather than an error -- so ask for whichever exists.
+        for names, value in (
+                (("Coat Weight", "Clearcoat"), float(o.get("coat", coat))),
+                (("Transmission Weight", "Transmission"), float(o.get("transmission", trans))),
+                (("IOR",), float(o.get("ior", 1.45)))):
+            for n in names:
+                if n in bsdf.inputs:
+                    bsdf.inputs[n].default_value = value
+                    break
+    if trans > 0.5:
+        mat.blend_method = "BLEND" if hasattr(mat, "blend_method") else mat.blend_method
     ob.data.materials.clear()
     ob.data.materials.append(mat)
-    return f"{ob.name}: {mat.name}"
+    return f"{ob.name}: {mat.name}" + (f" ({finish})" if finish else "")
 
+
+def op_transform_check(o):
+    """Scale and rotation must be applied. No exceptions.
+
+    A production rule this project kept breaking. An object carrying a scale
+    of, say, (1.6, 1.0, 0.3) renders correctly and then betrays you: modifiers
+    read it, normals shear under non-uniform scale, bevel widths come out
+    different on each axis, and every exporter bakes something different. It is
+    the classic silent-wrong. This bakes the transform into the mesh.
+    """
+    ob = _obj(o["name"])
+    before = tuple(round(v, 4) for v in ob.scale)
+    bpy.context.view_layer.objects.active = ob
+    for other in bpy.context.selected_objects:
+        other.select_set(False)
+    ob.select_set(True)
+    bpy.ops.object.transform_apply(location=bool(o.get("location", False)),
+                                   rotation=bool(o.get("rotation", True)),
+                                   scale=bool(o.get("scale", True)))
+    ob.select_set(False)
+    return f"{ob.name}: applied, was scale {before}"
 
 
 def op_mesh(o):
@@ -472,7 +535,7 @@ def _measure(o):
         lo, hi = None, None
         dg = bpy.context.evaluated_depsgraph_get()
         for ob in bpy.data.objects:
-            if ob.type != "MESH" or ob.hide_render:
+            if not _subject(ob):
                 continue
             a, b = _bounds(ob, dg)
             lo = a if lo is None else [min(lo[i], a[i]) for i in range(3)]
@@ -549,6 +612,19 @@ def _measure(o):
         finally:
             bm.free()
 
+    if what == "transform":
+        # "Always apply scale and rotation before export. No exceptions." --
+        # a rule this project broke repeatedly and then wondered why bevels
+        # came out uneven and normals sheared.
+        ob = _obj(o["name"])
+        sc = [round(v, 5) for v in ob.scale]
+        rot = [round(math.degrees(v), 3) for v in ob.rotation_euler]
+        uniform = max(sc) - min(sc) < 1e-4
+        return {"what": "transform", "name": o["name"], "scale": sc,
+                "rotation_deg": rot, "uniform_scale": uniform,
+                "scale_applied": all(abs(v - 1.0) < 1e-4 for v in sc),
+                "rotation_applied": all(abs(v) < 1e-3 for v in rot)}
+
     if what == "counts":
         ob = _obj(o["name"])
         verts, faces = _world_verts(ob, dg)
@@ -605,6 +681,17 @@ def op_assert(o):
                 f"does not fill. Model is {m['model_size'][0]}x{m['model_size'][1]} m against "
                 f"the drawing's {m['drawing_size'][0]}x{m['drawing_size'][1]} — see {m['rendered']}")
 
+    elif what == "transform":
+        if o.get("uniform_scale") and not m["uniform_scale"]:
+            raise ValueError(
+                f"{o['name']} has non-uniform scale {m['scale']} — normals shear, bevel "
+                "widths differ per axis, and every exporter bakes it differently. "
+                'Apply it: {"op":"apply_transform","name":"' + str(o["name"]) + '"}')
+        if o.get("applied") and not (m["scale_applied"] and m["rotation_applied"]):
+            raise ValueError(
+                f"{o['name']} carries an unapplied transform (scale {m['scale']}, "
+                f"rotation {m['rotation_deg']}). Apply it before relying on modifiers "
+                "or exporting.")
     elif what == "topology":
         for key, limit in (("ngons", "max_ngons"), ("tris", "max_tris"),
                            ("non_manifold_edges", "max_non_manifold"),
@@ -1094,7 +1181,7 @@ def _render_ortho(view, path, res=400, frame=None):
     lo, hi = None, None
     dg = bpy.context.evaluated_depsgraph_get()
     for ob in bpy.data.objects:
-        if ob.type != "MESH" or ob.hide_render:
+        if not _subject(ob):
             continue
         a, b = _bounds(ob, dg)
         lo = a if lo is None else [min(lo[i], a[i]) for i in range(3)]
@@ -1170,7 +1257,7 @@ def _look_stats():
     dg = bpy.context.evaluated_depsgraph_get()
     rows, faces = [], 0
     for ob in bpy.data.objects:
-        if ob.type != "MESH":
+        if not _subject(ob):
             continue
         ev = ob.evaluated_get(dg)
         me = ev.to_mesh()
@@ -1426,11 +1513,86 @@ def op_loft(o):
     return f"{res} from {src}{note}"
 
 
+def op_studio(o):
+    """Three-point lighting, a gradient sky and a floor.
+
+    Included because shading, not geometry, is most of whether a render reads
+    as convincing -- proved on one mesh in one session, where the same body went
+    from grey lump to product shot on lighting alone. The default stage exists
+    to make a model VISIBLE; this exists to make it look like something.
+    """
+    scn = bpy.context.scene
+    if scn.world is None:
+        scn.world = bpy.data.worlds.new("World")
+    scn.world.use_nodes = True
+    nt = scn.world.node_tree
+    bg = nt.nodes.get("Background")
+    if bg and o.get("gradient", True):
+        for n in list(nt.nodes):
+            if n.type in {"TEX_GRADIENT", "TEX_COORD", "VALTORGB"}:
+                nt.nodes.remove(n)
+        tex = nt.nodes.new("ShaderNodeTexCoord")
+        grad = nt.nodes.new("ShaderNodeTexGradient")
+        ramp = nt.nodes.new("ShaderNodeValToRGB")
+        lo = o.get("sky_low", [0.02, 0.025, 0.035])
+        hi = o.get("sky_high", [0.55, 0.60, 0.68])
+        ramp.color_ramp.elements[0].color = (*lo, 1)
+        ramp.color_ramp.elements[1].color = (*hi, 1)
+        nt.links.new(tex.outputs["Generated"], grad.inputs["Vector"])
+        nt.links.new(grad.outputs["Color"], ramp.inputs["Fac"])
+        nt.links.new(ramp.outputs["Color"], bg.inputs["Color"])
+    if bg:
+        bg.inputs["Strength"].default_value = float(o.get("sky_strength", 1.0))
+
+    for ob in [x for x in bpy.data.objects if x.type == "LIGHT"]:
+        bpy.data.objects.remove(ob, do_unlink=True)
+
+    dg = bpy.context.evaluated_depsgraph_get()
+    lo_b, hi_b = None, None
+    for ob in bpy.data.objects:
+        if not _subject(ob):
+            continue
+        a, b = _bounds(ob, dg)
+        lo_b = a if lo_b is None else [min(lo_b[i], a[i]) for i in range(3)]
+        hi_b = b if hi_b is None else [max(hi_b[i], b[i]) for i in range(3)]
+    span = max(hi_b[i] - lo_b[i] for i in range(3)) if lo_b else 2.0
+    cz = ((lo_b[2] + hi_b[2]) / 2) if lo_b else 1.0
+
+    # Scaled to the subject: a fixed rig blows out a ring and underlights a car.
+    power = float(o.get("power", 1.0)) * span * span
+    for loc, energy, size, rot in (
+            ((span * 0.9, -span * 1.4, span * 1.25), 55 * power, span * 1.8,
+             (math.radians(48), 0, math.radians(28))),
+            ((-span * 1.5, -span * 0.8, span * 0.8), 18 * power, span * 2.2,
+             (math.radians(64), 0, math.radians(-52))),
+            ((span * 0.1, span * 1.6, span * 1.0), 28 * power, span * 2.0,
+             (math.radians(-58), 0, 0))):
+        bpy.ops.object.light_add(type="AREA", location=loc, rotation=rot)
+        L = bpy.context.active_object
+        L.data.energy = energy
+        L.data.size = size
+
+    if o.get("floor", True):
+        existing = bpy.data.objects.get("StudioFloor")
+        if existing:
+            bpy.data.objects.remove(existing, do_unlink=True)
+        bpy.ops.mesh.primitive_plane_add(size=span * 6,
+                                         location=(0, 0, lo_b[2] if lo_b else 0.0))
+        f = bpy.context.active_object
+        f.name = "StudioFloor"
+        f["omatron_helper"] = True
+        op_material({"name": "StudioFloor", "material": "Floor",
+                     "finish": "matte_paint",
+                     "color": o.get("floor_color", [0.16, 0.17, 0.19])})
+    return f"studio: 3 lights scaled to a {span:.2f} m subject"
+
+
 OPS = {
     "add": op_add,
     "mesh": op_mesh,
     "shade": op_shade,
     "normals": op_normals,
+    "studio": op_studio,
     "look": op_look,
     "reference": op_reference,
     "trace": op_trace,
@@ -1452,6 +1614,7 @@ OPS = {
     "delete": op_delete,
     "rename": op_rename,
     "material": op_material,
+    "apply_transform": op_transform_check,
 }
 
 
@@ -1473,6 +1636,17 @@ def scene():
             "material": next((m.name for m in getattr(o.data, "materials", None) or [] if m), None),
         })
     return out
+
+
+def _subject(ob):
+    """Is this object part of the MODEL, or scenery we added around it?
+
+    A studio floor is a mesh like any other, so it framed the camera, stretched
+    the scene bounds and joined the silhouette -- an 86-metre plane next to a
+    4-metre car put the car three pixels wide. Anything this file adds for
+    presentation is tagged, and every measurement and framing skips it.
+    """
+    return ob.type == "MESH" and not ob.hide_render and not ob.get("omatron_helper")
 
 
 def _stage():
@@ -1509,7 +1683,7 @@ def _stage():
 
     # Framed on the scene's own bounds rather than a fixed point, so a large
     # model is not off the edge and a small one is not a dot.
-    meshes = [o for o in bpy.data.objects if o.type == "MESH"]
+    meshes = [o for o in bpy.data.objects if _subject(o)]
     if meshes:
         # Evaluated bounds, for the same reason the measure op uses them: a
         # mirrored or arrayed model has a base mesh far smaller than the thing

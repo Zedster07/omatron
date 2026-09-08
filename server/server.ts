@@ -3911,9 +3911,16 @@ server.registerTool(
       "  delete_faces the selection\n" +
       "  apply_modifiers   name — bake them into the mesh, needed before booleans against the result\n" +
       "  measure      what: bounds | overlap | gap | enclosed | topology | silhouette | selection\n" +
+      "               | transform\n" +
       "               | counts — name, and with (or view, for silhouette)\n" +
       "  assert       the same measurements, but REQUIRED to hold; a failed assert aborts the batch unsaved\n" +
-      "  material     name, material, color [r,g,b] 0-1, roughness, metallic\n" +
+      "  material     name, material, finish: paint | matte_paint | rubber | glass | tinted_glass\n" +
+      "               | chrome | alloy | brushed | plastic | lens | steel; color/roughness/metallic\n" +
+      "               override the preset. Reach for a finish, not four sliders\n" +
+      "  studio       three-point lighting, gradient sky and floor, scaled to the subject. Shading\n" +
+      "               is most of whether a render reads as convincing, at any geometry quality\n" +
+      "  apply_transform  name — bake scale and rotation into the mesh. Always do this before\n" +
+      "               relying on modifiers or exporting; non-uniform scale shears normals\n" +
       "  delete / rename   name (rename also takes to)\n" +
       "\n" +
       "DO NOT BUILD BLIND. Put {op:\"look\", label:\"...\"} at the points where you made a decision, and " +

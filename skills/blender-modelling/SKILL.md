@@ -278,6 +278,32 @@ that a wheel floats. Neither alone is enough, which is why a look returns both.
 Eight looks per batch is the limit, and hitting it means the batch is doing too
 much at once. Split it and look between the calls.
 
+## Shading is not the last 10%
+
+Most of whether a render reads as convincing is shading and light, not
+geometry. The same body, unchanged, goes from grey lump to something that
+looks like a product on finishes and a studio rig alone — proved on one mesh
+in one session, twice.
+
+    {op:"material", name:"Body",  finish:"paint", color:[0.35,0.04,0.06]}
+    {op:"material", name:"Wheel", finish:"rubber"}
+    {op:"material", name:"Glass", finish:"tinted_glass"}
+    {op:"studio"}
+
+Reach for a named finish — paint, rubber, glass, chrome, alloy, brushed,
+plastic, lens, steel — rather than guessing at four sliders. `color` and the
+rest still override where you want them to. `studio` scales its lights to the
+subject, because a rig sized for a ring blows out a car and one sized for a car
+underlights a ring.
+
+## Apply scale and rotation. No exceptions
+
+An object carrying scale (1.6, 1.0, 0.3) renders fine and then betrays you:
+normals shear, bevel widths come out different on each axis, and every exporter
+bakes something different. `{op:"apply_transform", name:"..."}` bakes it in;
+`{op:"assert", what:"transform", name:"...", uniform_scale:true, applied:true}`
+refuses to continue without it.
+
 ## Measure. Do not squint at the render
 
 A picture will not tell you that a part is buried inside another one, that two
