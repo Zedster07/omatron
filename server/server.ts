@@ -3883,6 +3883,7 @@ server.registerTool(
       "  transform    name, plus at [x,y,z] or move_by [x,y,z], rotation_deg, scale (number or [x,y,z])\n" +
       "  modifier     name, kind: boolean (with, mode DIFFERENCE|UNION|INTERSECT) | array (count, offset)\n" +
       "               | bevel (width, segments) | subdivide (levels) | solidify (thickness)\n" +
+      "               | shrinkwrap (to, offset) — conform a panel or trim onto a curved body\n" +
       "               | mirror (axis x|y|z or a list; reflects about the WORLD origin, so model one\n" +
       "                 side and let it own the other) | weighted_normal (makes bevels read correctly)\n" +
       "  shade        name, smooth true|false, angle_deg — smooth above the angle, sharp below it\n" +
@@ -3900,6 +3901,17 @@ server.registerTool(
       "               invented oval. Mirrors by default\n" +
       "  render_view  view, to — an orthographic view; a silhouette shows proportion faults a\n" +
       "               three-quarter render hides\n" +
+      "  revolve      name, profile [[x,y,z],...], axis, at, degrees, steps — turn a profile about\n" +
+      "               an axis. Rims, flanges, bottles, pulleys: anything turned is this, and no\n" +
+      "               arrangement of primitives substitutes for it\n" +
+      "  select_loop  name, near [x,y,z], ring true|false — the edge loop (or ring) nearest a\n" +
+      "               point. THE selection of real modelling; region and normal are spatial\n" +
+      "               queries, loops are how a form is actually worked. Bevel a LOOP, never a ring\n" +
+      "  bridge       name — surface the selected edge loops together\n" +
+      "  separate     name, to — split the selected faces into their own object (panels, parts)\n" +
+      "  clean        name, distance, dissolve_flat — merge doubles, drop loose geometry; the\n" +
+      "               tidy-up every boolean needs before subdivision behaves\n" +
+      "  smooth       name, iterations, factor — relax the selection without moving the form\n" +
       "  select       name, plus region [x0,y0,z0,x1,y1,z1] | normal +x|-x|+y|-y|+z|-z with tol\n" +
       "               | sharper_than degrees; elements faces|edges|both. Selection persists across\n" +
       "               the ops below. An empty selection is an error, never a silent no-op\n" +

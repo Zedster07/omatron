@@ -191,6 +191,13 @@ def op_modifier(o):
         ob.data.use_auto_smooth = True if hasattr(ob.data, "use_auto_smooth") else None
         m = ob.modifiers.new(name="WeightedNormal", type="WEIGHTED_NORMAL")
         m.keep_sharp = True
+    elif kind == "shrinkwrap":
+        # Conform one surface onto another -- how a panel, a decal or a trim
+        # strip is made to sit exactly on a curved body.
+        m = ob.modifiers.new(name="Shrinkwrap", type="SHRINKWRAP")
+        m.target = _obj(o["to"])
+        m.offset = float(o.get("offset", 0.0))
+        m.wrap_method = str(o.get("method", "NEAREST_SURFACEPOINT")).upper()
     elif kind == "solidify":
         m = ob.modifiers.new(name="Solidify", type="SOLIDIFY")
         m.thickness = float(o.get("thickness", 0.1))
@@ -1587,6 +1594,225 @@ def op_studio(o):
     return f"studio: 3 lights scaled to a {span:.2f} m subject"
 
 
+# ------------------------------------------------------- modelling, properly
+#
+# Everything above selects by REGION and by NORMAL, which is a spatial query --
+# useful for "the faces on the nose", useless for the way modelling actually
+# works. A modeller works in loops and rings: pick an edge, run the loop all
+# the way round the form, and operate on that. Every panel line, every support
+# loop, every bridge between two openings is a loop operation, and none of them
+# is expressible as a bounding box.
+#
+# And a whole class of shapes was simply unreachable. Anything turned on an
+# axis -- a rim, a flange, a bottle, a vase, a pulley -- is a profile revolved,
+# and no arrangement of primitives and booleans substitutes for that.
+
+def _seed_edge(bm, mw, near):
+    """The edge nearest a world point. How you name an edge without an index."""
+    p = mathutils.Vector(near)
+    best, bd = None, None
+    for e in bm.edges:
+        m = mw @ ((e.verts[0].co + e.verts[1].co) / 2.0)
+        d = (m - p).length
+        if bd is None or d < bd:
+            best, bd = e, d
+    return best, bd
+
+
+def _walk_loop(seed, ring=False):
+    """Follow an edge loop (or ring) from a seed edge.
+
+    A loop continues through a vertex of valence four, taking the edge
+    'opposite' the one it arrived on. A ring steps sideways across quads
+    instead. Both stop at a pole or a boundary, which is exactly where a
+    modeller's loop select stops too.
+    """
+    out, seen = [seed], {seed}
+    if ring:
+        for direction in (0, 1):
+            e, f = seed, None
+            faces = list(seed.link_faces)
+            if not faces:
+                break
+            f = faces[direction] if len(faces) > direction else faces[0]
+            while True:
+                if f is None or len(f.verts) != 4:
+                    break
+                opp = None
+                fe = list(f.edges)
+                i = fe.index(e) if e in fe else None
+                if i is None:
+                    break
+                opp = fe[(i + 2) % 4]
+                if opp in seen:
+                    break
+                out.append(opp); seen.add(opp)
+                nxt = [g for g in opp.link_faces if g is not f]
+                e, f = opp, (nxt[0] if nxt else None)
+        return out
+
+    for v_start in (seed.verts[0], seed.verts[1]):
+        e, v = seed, v_start
+        while True:
+            if len(v.link_edges) != 4:
+                break
+            # the edge across the vertex: not e, and not sharing a face with e
+            cands = [x for x in v.link_edges if x is not e]
+            opp = None
+            for c in cands:
+                if not set(c.link_faces) & set(e.link_faces):
+                    opp = c
+                    break
+            if opp is None or opp in seen:
+                break
+            out.append(opp); seen.add(opp)
+            v = opp.other_vert(v)
+            e = opp
+    return out
+
+
+def op_select_loop(o):
+    """Select an edge loop or ring, named by a point near it."""
+    ob = _obj(o["name"])
+    bm = _open(ob)
+    seed, dist = _seed_edge(bm, ob.matrix_world, _vec(o["near"]))
+    if seed is None:
+        bm.free()
+        raise ValueError(f"{ob.name} has no edges")
+    edges = _walk_loop(seed, ring=bool(o.get("ring", False)))
+    for e in bm.edges:
+        e.select = False
+    for f in bm.faces:
+        f.select = False
+    for e in edges:
+        e.select = True
+    n = len(edges)
+    _close(bm, ob)
+    return (f"{ob.name}: {'ring' if o.get('ring') else 'loop'} of {n} edge(s), "
+            f"seeded {dist:.3f} m from the point given")
+
+
+def op_revolve(o):
+    """Turn a profile around an axis. The operation this had no substitute for.
+
+    A rim, a flange, a bottle, a wheel hub, a pulley -- every one of them is a
+    2D profile spun about a line, and every one of them was previously
+    approximated with stacked cylinders.
+    """
+    prof = [tuple(float(c) for c in v) for v in o["profile"]]
+    if len(prof) < 2:
+        raise ValueError("a profile needs at least two points, as [x, y, z] triples")
+    axis = _vec(o.get("axis"), (0.0, 0.0, 1.0))
+    centre = _vec(o.get("at"))
+    steps = max(3, min(int(o.get("steps", 32)), 512))
+    angle = math.radians(float(o.get("degrees", 360.0)))
+    close = abs(angle - 2 * math.pi) < 1e-6
+
+    import bmesh
+    bm = bmesh.new()
+    verts = [bm.verts.new(p) for p in prof]
+    for a, b in zip(verts, verts[1:]):
+        bm.edges.new((a, b))
+    bmesh.ops.spin(bm, geom=verts + bm.edges[:], cent=centre,
+                   axis=mathutils.Vector(axis).normalized(),
+                   dvec=(0, 0, 0), angle=angle, steps=steps,
+                   use_merge=close, use_duplicate=False)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-5)
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+
+    me = bpy.data.meshes.new(o.get("name", "Revolved"))
+    bm.to_mesh(me); bm.free(); me.update()
+    ob = bpy.data.objects.new(o.get("name", "Revolved"), me)
+    bpy.context.collection.objects.link(ob)
+    return f"{ob.name} ({len(me.vertices)} verts, {len(me.polygons)} faces)"
+
+
+def op_bridge(o):
+    """Join the selected edge loops with a surface between them."""
+    import bmesh
+    ob = _obj(o["name"])
+    bm = _open(ob)
+    sel = _require(_selected(bm, "edges"), "bridge", o)
+    try:
+        bmesh.ops.bridge_loops(bm, edges=sel, use_pairs=bool(o.get("pairs", False)))
+    except RuntimeError as e:
+        bm.free()
+        raise ValueError(
+            f"cannot bridge those edges ({e}). Bridging wants two separate closed "
+            "loops with nothing between them -- select one loop, then the other.")
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    _close(bm, ob)
+    return f"{ob.name}: bridged {len(sel)} edge(s)"
+
+
+def op_separate(o):
+    """Split the selected faces into an object of their own -- panels, parts."""
+    import bmesh
+    ob = _obj(o["name"])
+    bm = _open(ob)
+    sel = _require(_selected(bm, "faces"), "separate", o)
+    verts = {v for f in sel for v in f.verts}
+    vmap = {}
+    nbm = bmesh.new()
+    for v in verts:
+        vmap[v] = nbm.verts.new(v.co)
+    nbm.verts.index_update()
+    for f in sel:
+        try:
+            nbm.faces.new([vmap[v] for v in f.verts])
+        except ValueError:
+            pass
+    bmesh.ops.recalc_face_normals(nbm, faces=nbm.faces)
+    me = bpy.data.meshes.new(o.get("to", ob.name + "_part"))
+    nbm.to_mesh(me); nbm.free(); me.update()
+    new = bpy.data.objects.new(o.get("to", ob.name + "_part"), me)
+    new.matrix_world = ob.matrix_world.copy()
+    bpy.context.collection.objects.link(new)
+    if o.get("keep", False) is False:
+        bmesh.ops.delete(bm, geom=sel, context="FACES")
+    _close(bm, ob)
+    return f"{new.name}: {len(me.polygons)} face(s) taken from {ob.name}"
+
+
+def op_clean(o):
+    """Merge doubles, dissolve stray edges, drop loose geometry.
+
+    The tidy-up every mesh needs after booleans, and the thing that decides
+    whether subdivision behaves.
+    """
+    import bmesh
+    ob = _obj(o["name"])
+    bm = _open(ob)
+    before = (len(bm.verts), len(bm.faces))
+    bmesh.ops.remove_doubles(bm, verts=bm.verts[:], dist=float(o.get("distance", 1e-4)))
+    loose = [v for v in bm.verts if not v.link_edges]
+    if loose:
+        bmesh.ops.delete(bm, geom=loose, context="VERTS")
+    if o.get("dissolve_flat"):
+        lim = math.radians(float(o["dissolve_flat"]))
+        flat = [e for e in bm.edges
+                if len(e.link_faces) == 2 and e.calc_face_angle(0.0) < lim]
+        if flat:
+            bmesh.ops.dissolve_edges(bm, edges=flat, use_verts=True)
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    after = (len(bm.verts), len(bm.faces))
+    _close(bm, ob)
+    return (f"{ob.name}: {before[0]}->{after[0]} verts, {before[1]}->{after[1]} faces")
+
+
+def op_smooth(o):
+    """Relax the selected vertices. Takes lumps out without moving the form."""
+    import bmesh
+    ob = _obj(o["name"])
+    bm = _open(ob)
+    sel = [v for v in bm.verts if v.select] or bm.verts[:]
+    for _ in range(max(1, min(int(o.get("iterations", 2)), 20))):
+        bmesh.ops.smooth_vert(bm, verts=sel, factor=float(o.get("factor", 0.5)),
+                              use_axis_x=True, use_axis_y=True, use_axis_z=True)
+    _close(bm, ob)
+    return f"{ob.name}: relaxed {len(sel)} vert(s)"
+
+
 OPS = {
     "add": op_add,
     "mesh": op_mesh,
@@ -1599,6 +1825,12 @@ OPS = {
     "loft": op_loft,
     "render_view": op_render_view,
     "select": op_select,
+    "select_loop": op_select_loop,
+    "revolve": op_revolve,
+    "bridge": op_bridge,
+    "separate": op_separate,
+    "clean": op_clean,
+    "smooth": op_smooth,
     "crease": op_crease,
     "inset": op_inset,
     "extrude": op_extrude,

@@ -47,6 +47,39 @@ Curved surfaces want **evenly spaced loops**; where the surface flattens out,
 terminate them rather than carrying the density across the whole mesh. Favour
 even quads and avoid long thin triangles.
 
+## Anything turned is a revolve
+
+A rim, a flange, a bottle, a pulley, a vase — every one is a 2D profile spun
+about an axis, and stacking cylinders to fake one never works. Draw the
+cross-section, spin it:
+
+    {op:"revolve", name:"Tyre", axis:[0,1,0], steps:48,
+     profile:[[0,-0.105,0.20],[0,-0.105,0.295],[0,-0.088,0.315],
+              [0,0.088,0.315],[0,0.105,0.295],[0,0.105,0.20],[0,-0.105,0.20]]}
+
+Repeat the first point at the end to close the section. A revolved profile
+comes out all quads with no non-manifold edges — the cleanest geometry this
+tool produces.
+
+## Work in loops, not boxes
+
+`select` by region and normal is a spatial query. Real modelling is loops: pick
+an edge, run the loop round the form, operate on that. Every panel line,
+support loop and bridge is a loop operation and none is expressible as a
+bounding box.
+
+    {op:"select_loop", name:"Tyre", near:[0.315, 0.088, 0.021]}
+    {op:"bevel_edges", name:"Tyre", width:0.010, segments:2}
+
+**Bevel a loop, never a ring.** A loop is a continuous chain along the surface;
+a ring is the parallel edges crossing a band. Bevelling the loop round a tyre
+gave 384 quads and no ngons; bevelling the ring at the same place gave 192
+triangles and 96 ngons and halved the quad ratio. The topology assert catches
+it either way — but knowing which you have saves the cycle.
+
+`near` names an edge by a point in space, because an index means nothing to
+anyone who did not place the vertex and changes the moment anything is bevelled.
+
 ## Symmetry is structural
 
 Use `{op: "modifier", kind: "mirror", axis: "x"}` and model one side. Placing
