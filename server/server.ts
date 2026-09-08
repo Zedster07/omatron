@@ -3910,6 +3910,14 @@ server.registerTool(
       "  move         name, offset [x,y,z] | along_normal d | scale | rotate_deg + axis, about —\n" +
       "               push and pull the SELECTION. Everything else adds geometry or cuts it;\n" +
       "               this is the one that shapes what is already there\n" +
+      "  sweep        name, profile [[u,v],...], path [[x,y,z],...], up, scale, caps — run a\n" +
+      "               profile along a path. Pipes, trim, rails, roll bars, cables\n" +
+      "  bisect       name, at, normal, fill, clear none|positive|negative — the knife. Puts a\n" +
+      "               real edge loop where a plane crosses the surface, which is what a panel\n" +
+      "               shutline IS; leaves that loop selected. Also trims a side away\n" +
+      "  snap         name, to grid|plane|surface (+ step | at+normal | target) — put the\n" +
+      "               selection EXACTLY somewhere. Near-enough leaves seams that booleans choke\n" +
+      "               on and exporters turn into holes\n" +
       "  bridge       name — surface the selected edge loops together\n" +
       "  separate     name, to — split the selected faces into their own object (panels, parts)\n" +
       "  clean        name, distance, dissolve_flat — merge doubles, drop loose geometry; the\n" +

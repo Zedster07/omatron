@@ -61,6 +61,44 @@ Repeat the first point at the end to close the section. A revolved profile
 comes out all quads with no non-manifold edges — the cleanest geometry this
 tool produces.
 
+## Sweep a profile along a path
+
+Pipes, trim, rails, roll bars, cables, handles — a section run along a line.
+
+    {op:"sweep", name:"Hoop",
+     profile:[[u,v], ...],            // the section, in its own plane
+     path:[[x,y,z], ...]}             // where it goes
+
+The profile's orientation is carried along the path by parallel transport, so
+it does not spin where the path turns towards vertical. That matters: rebuild
+the frame from a fixed world "up" at each point instead and every pipe that
+goes over a corner comes out with a twist in it.
+
+## Cut a real line with bisect
+
+A panel shutline is an edge loop. Without one there is nothing to crease,
+inset or separate along, and panel lines have to be faked with booleans that
+leave ngons everywhere.
+
+    {op:"bisect", name:"Body", at:[0.15,0,0], normal:[1,0,0]}
+    {op:"crease", name:"Body", weight:1.0}
+
+It leaves the new loop selected, because the next operation is almost always
+about it. `clear:"positive"` or `"negative"` trims a side away instead.
+
+## Snap, do not nearly-snap
+
+Vertices 0.3 mm apart look joined, read as joined at a glance, and then fail to
+merge — leaving a seam a boolean chokes on and an exporter turns into a hole.
+
+    {op:"snap", name:"Panel", to:"plane", at:[0,0,2.0], normal:[0,0,1]}
+    {op:"snap", name:"Trim",  to:"surface", target:"Body", offset:[0,0,0.002]}
+    {op:"snap", name:"Part",  to:"grid", step:0.005}
+
+`surface` is how trim is made to sit exactly on a curved body. Each reports how
+far the furthest vertex actually moved, which tells you whether you snapped a
+rounding error or something you did not mean to touch.
+
 ## Push and pull what is already there
 
 Every other operation either adds geometry or cuts it. `move` is the one that

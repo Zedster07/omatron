@@ -1915,6 +1915,189 @@ def op_move(o):
     return f"{ob.name}: {n} vert(s) " + (", ".join(what) or "unchanged")
 
 
+def op_sweep(o):
+    """Run a profile along a path. Pipes, trim, rails, handles, cables.
+
+    Uses parallel transport to carry the profile's orientation from one path
+    point to the next, rather than rebuilding a frame from a fixed world "up"
+    at each step. The naive version spins the profile wherever the path turns
+    towards vertical, which puts a visible twist in every pipe that goes over a
+    corner -- and a swept part with a twist in it is scrap.
+    """
+    prof = [tuple(float(c) for c in v) for v in o["profile"]]
+    path = [mathutils.Vector(_vec(p)) for p in o["path"]]
+    if len(prof) < 2:
+        raise ValueError("a profile needs at least two points, as [u, v] pairs or [x, y, z]")
+    if len(path) < 2:
+        raise ValueError("a path needs at least two points")
+    prof2 = [(p[0], p[1]) for p in prof]
+    closed_profile = (prof2[0] == prof2[-1]) or bool(o.get("closed", True))
+    if prof2[0] == prof2[-1]:
+        prof2 = prof2[:-1]
+
+    # A frame carried along the path, turned only by what the path does.
+    tangents = []
+    for i in range(len(path)):
+        if i == 0:
+            t = path[1] - path[0]
+        elif i == len(path) - 1:
+            t = path[-1] - path[-2]
+        else:
+            t = path[i + 1] - path[i - 1]
+        if t.length < 1e-9:
+            raise ValueError(f"path point {i} repeats the one before it")
+        tangents.append(t.normalized())
+
+    up = mathutils.Vector(_vec(o.get("up"), (0.0, 0.0, 1.0)))
+    n0 = (up - tangents[0] * up.dot(tangents[0]))
+    if n0.length < 1e-6:                       # path starts parallel to up
+        n0 = tangents[0].orthogonal()
+    n0.normalize()
+
+    frames, normal = [], n0
+    for i, t in enumerate(tangents):
+        if i > 0:
+            prev = tangents[i - 1]
+            axis = prev.cross(t)
+            if axis.length > 1e-9:
+                ang = prev.angle(t)
+                normal = mathutils.Matrix.Rotation(ang, 3, axis.normalized()) @ normal
+            normal = (normal - t * normal.dot(t)).normalized()
+        frames.append((normal.copy(), t.cross(normal).normalized()))
+
+    ring = len(prof2)
+    verts, faces = [], []
+    for i, c in enumerate(path):
+        nx, ny = frames[i]
+        scale = float(o.get("scale", 1.0))
+        for u, v in prof2:
+            verts.append(tuple(c + nx * (u * scale) + ny * (v * scale)))
+    for i in range(len(path) - 1):
+        a, b = i * ring, (i + 1) * ring
+        last = ring if closed_profile else ring - 1
+        for k in range(last):
+            k2 = (k + 1) % ring
+            faces.append((a + k, a + k2, b + k2, b + k))
+    if closed_profile and o.get("caps", True):
+        faces.append(tuple(range(ring - 1, -1, -1)))
+        faces.append(tuple(range(len(verts) - ring, len(verts))))
+
+    res = op_mesh({"name": o.get("name", "Swept"), "verts": verts, "faces": faces})
+    op_normals({"name": o.get("name", "Swept")})
+    return f"{res} along {len(path)} path point(s)"
+
+
+def op_bisect(o):
+    """Cut the mesh with a plane -- a panel line, a shutline, or a trim.
+
+    This is the knife. It puts a real edge loop where the plane crosses the
+    surface, which is what a shutline IS: without one there is nothing to
+    crease, inset or separate along, and panel lines have to be faked by
+    booleans that leave ngons everywhere.
+    """
+    import bmesh
+    ob = _obj(o["name"])
+    bm = _open(ob)
+    mw = ob.matrix_world
+    inv = mw.inverted_safe()
+    co = inv @ mathutils.Vector(_vec(o.get("at")))
+    no = (inv.to_3x3().transposed() @ mathutils.Vector(_vec(o.get("normal"), (0.0, 0.0, 1.0))))
+    if no.length < 1e-9:
+        bm.free()
+        raise ValueError("the cutting plane needs a normal that is not zero")
+    no.normalize()
+
+    clear = str(o.get("clear", "none")).lower()
+    geom = bm.verts[:] + bm.edges[:] + bm.faces[:]
+    res = bmesh.ops.bisect_plane(
+        bm, geom=geom, plane_co=co, plane_no=no,
+        clear_inner=(clear == "negative"), clear_outer=(clear == "positive"),
+        use_snap_center=False)
+
+    cut = [e for e in res.get("geom_cut", []) if isinstance(e, bmesh.types.BMEdge)]
+    if o.get("fill") and cut:
+        try:
+            bmesh.ops.edgeloop_fill(bm, edges=cut)
+        except RuntimeError:
+            pass
+    # Leave the new loop selected: the next op is almost always about it.
+    for e in bm.edges:
+        e.select = False
+    for f in bm.faces:
+        f.select = False
+    for v in bm.verts:
+        v.select = False
+    for e in cut:
+        if e.is_valid:
+            e.select = True
+            e.verts[0].select = True
+            e.verts[1].select = True
+    n = len(cut)
+    _close(bm, ob)
+    if not n:
+        raise ValueError(
+            f"the plane does not cross {ob.name} -- nothing was cut. Check `at` lies "
+            "inside the object; measure its bounds if you are unsure.")
+    return f"{ob.name}: cut a loop of {n} edge(s)" + (", filled" if o.get("fill") else "")
+
+
+def op_snap(o):
+    """Put the selection exactly somewhere: on a grid, on a plane, or on a surface.
+
+    Near-enough is not enough. Vertices that are 0.3 mm apart look joined,
+    measure as joined at a glance, and then fail to merge, leave a seam a
+    boolean chokes on, and export as a hole.
+    """
+    import bmesh
+    ob = _obj(o["name"])
+    bm = _open(ob)
+    verts = _require(_sel_verts(bm), "snap", o)
+    mw = ob.matrix_world
+    inv = mw.inverted_safe()
+    mode = str(o.get("to", "grid")).lower()
+    moved = 0.0
+
+    if mode == "grid":
+        step = float(o.get("step", 0.01))
+        if step <= 0:
+            bm.free()
+            raise ValueError("grid step must be positive")
+        for v in verts:
+            w = mw @ v.co
+            t = mathutils.Vector([round(c / step) * step for c in w])
+            moved = max(moved, (t - w).length)
+            v.co = inv @ t
+    elif mode == "plane":
+        co = mathutils.Vector(_vec(o.get("at")))
+        no = mathutils.Vector(_vec(o.get("normal"), (0.0, 0.0, 1.0)))
+        if no.length < 1e-9:
+            bm.free()
+            raise ValueError("the plane needs a normal that is not zero")
+        no.normalize()
+        for v in verts:
+            w = mw @ v.co
+            t = w - no * (w - co).dot(no)
+            moved = max(moved, (t - w).length)
+            v.co = inv @ t
+    elif mode == "surface":
+        target = _obj(o["target"])
+        dg = bpy.context.evaluated_depsgraph_get()
+        tree = _bvh(target, dg)
+        for v in verts:
+            w = mw @ v.co
+            loc = tree.find_nearest(w)[0]
+            if loc is None:
+                continue
+            moved = max(moved, (loc - w).length)
+            v.co = inv @ (loc + mathutils.Vector(_vec(o.get("offset"))))
+    else:
+        bm.free()
+        raise ValueError(f"unknown snap target {mode!r}; try grid, plane or surface")
+
+    _close(bm, ob)
+    return f"{ob.name}: snapped {len(verts)} vert(s) to {mode}, furthest moved {moved:.5f} m"
+
+
 OPS = {
     "add": op_add,
     "mesh": op_mesh,
@@ -1933,6 +2116,9 @@ OPS = {
     "separate": op_separate,
     "clean": op_clean,
     "move": op_move,
+    "sweep": op_sweep,
+    "bisect": op_bisect,
+    "snap": op_snap,
     "smooth": op_smooth,
     "crease": op_crease,
     "inset": op_inset,
