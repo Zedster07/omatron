@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Launcher for PatrykIti/blender-ai-mcp, the OTHER Blender MCP server.
+#
+# Why both exist:
+#
+#   desktop_blender_* (ours)   headless, atomic, policy-gated. Opens the
+#                              .blend, applies, saves, exits. Nothing to
+#                              install, nothing left running, every call
+#                              passes through the Omatron gate.
+#   blender-ai-mcp             a live GUI Blender driven over RPC, with
+#                              macros, import/export and a semantic router.
+#                              Richer, and NOT gated by our policy.
+#
+# The second point is the one to be awake about. This server talks to a
+# Blender addon on a TCP port; nothing about that path consults
+# policy.jsonc, so anything it can do, an agent can do unasked. It also
+# imports and exports files to paths of its choosing. Run it when you want
+# that capability, stop it when you do not -- which is what this script is
+# for.
+#
+# Upstream binds the addon to 0.0.0.0, commented "within container". The
+# addon does not run in the container; it runs on this machine. That is an
+# unauthenticated Blender-command port on the local network, so the copy in
+# ~/.config/blender/*/scripts/addons is patched to loopback. If you ever
+# reinstall the addon from upstream, re-apply that.
+set -euo pipefail
+
+ROOT="${BLENDER_AI_MCP_ROOT:-/mnt/data/blender-ai-mcp}"
+PY="$ROOT/.venv/bin/python"
+
+if [[ ! -x "$PY" ]]; then
+  echo "blender-ai-mcp is not installed at $ROOT" >&2
+  echo "  clone it and: uv venv --python 3.12 .venv && uv pip install -e ." >&2
+  exit 1
+fi
+
+# Loopback, matching the addon's patched bind. The addon must be enabled in
+# a RUNNING Blender for any of this to answer -- headless does not serve RPC.
+export BLENDER_RPC_HOST="${BLENDER_RPC_HOST:-127.0.0.1}"
+export BLENDER_RPC_PORT="${BLENDER_RPC_PORT:-8765}"
+export ROUTER_ENABLED="${ROUTER_ENABLED:-true}"
+export MCP_SURFACE_PROFILE="${MCP_SURFACE_PROFILE:-llm-guided}"
+export BLENDER_AI_TMP_INTERNAL_DIR="${BLENDER_AI_TMP_INTERNAL_DIR:-/tmp/blender-ai-mcp}"
+export BLENDER_AI_TMP_EXTERNAL_DIR="${BLENDER_AI_TMP_EXTERNAL_DIR:-/tmp/blender-ai-mcp}"
+mkdir -p "$BLENDER_AI_TMP_INTERNAL_DIR"
+
+cd "$ROOT"
+exec "$PY" -m server.main "$@"

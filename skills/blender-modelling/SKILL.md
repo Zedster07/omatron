@@ -31,6 +31,22 @@ silhouette.
 `extrude_profile` turns a 2D outline into a solid, which is most hard-surface
 work: draw the cross-section, give it depth.
 
+## One surface first, panels later
+
+The way vehicles are actually modelled: build the whole outer surface as a
+single continuous piece, with the proportions right, and do not cut it into
+panels until the form is finished. Body, roof, bonnet and wings are one skin;
+the gaps between them are cut afterwards.
+
+The first car did the reverse — a box for the body, a box for the cabin, a box
+for the skirt — and that is precisely why it read as boxes. Separate objects
+have no shared silhouette, so there is no continuous form for the eye to
+follow, and no amount of positioning creates one.
+
+Curved surfaces want **evenly spaced loops**; where the surface flattens out,
+terminate them rather than carrying the density across the whole mesh. Favour
+even quads and avoid long thin triangles.
+
 ## Symmetry is structural
 
 Use `{op: "modifier", kind: "mirror", axis: "x"}` and model one side. Placing
