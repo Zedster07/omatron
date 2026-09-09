@@ -695,7 +695,45 @@ def _measure(o):
             agree[dim] = {"sources": {v[0]: v[1] for v in vals},
                           "spread": round((hi - lo) / max(hi, 1e-9), 4), "checked": True}
 
-        return {"what": "references", "views": got, "agreement": agree}
+        # Which way round each drawing faces.
+        #
+        # The agreement check above cannot see this: a 180-degree flip
+        # preserves every dimension, so a plan view drawn tail-first passes it
+        # perfectly and then puts every feature at the wrong end. Same blind
+        # spot as measuring a mirrored car by its bounding box.
+        #
+        # Side and top both run along the length, so their extent profiles can
+        # be correlated -- once as drawn, once with the plan reversed. Whichever
+        # scores higher is the orientation the drawings agree on.
+        orient = None
+        if "side" in got and "top" in got and "error" not in got["side"]:
+            try:
+                import numpy as np
+
+                def profile(mask, n=64):
+                    cols = np.where(mask.any(axis=0))[0]
+                    ext = mask.sum(axis=0)[cols[0]:cols[-1] + 1].astype(float)
+                    idx = np.linspace(0, len(ext) - 1, n).astype(int)
+                    q = ext[idx]
+                    return (q - q.mean()) / (q.std() or 1.0)
+
+                sm, _ = _reference_mask("side")
+                tm, _ = _reference_mask("top")
+                a = profile(sm)
+                b, c = profile(tm), profile(tm[:, ::-1])
+                fwd = float(np.corrcoef(a, b)[0, 1])
+                rev = float(np.corrcoef(a, c)[0, 1])
+                margin = float(o.get("margin", 0.15))
+                verdict = ("likely flipped" if rev - fwd > margin
+                           else "aligned" if fwd - rev > margin
+                           else "cannot tell")
+                orient = {"as_drawn": round(fwd, 3), "reversed": round(rev, 3),
+                          "verdict": verdict}
+            except Exception:                       # noqa: BLE001
+                orient = None
+
+        return {"what": "references", "views": got, "agreement": agree,
+                "orientation": orient}
 
     if what == "counts":
         ob = _obj(o["name"])
@@ -780,6 +818,15 @@ def op_assert(o):
                     f"the drawings disagree about {dim} by {a['spread'] * 100:.1f}%: {pairs}. "
                     "One of them is mis-scaled, mis-cropped, or attached to the wrong view -- "
                     "and every measurement taken from it will be wrong in the same proportion.")
+        orient = m.get("orientation")
+        if orient and orient["verdict"] == "likely flipped" and o.get("orientation", True):
+            raise ValueError(
+                "the side and plan views appear to face opposite ways: their profiles correlate "
+                f"{orient['as_drawn']:+.2f} as drawn and {orient['reversed']:+.2f} with the plan "
+                "reversed. Every dimension still agrees -- a flip preserves all of them -- but "
+                "every feature would land at the wrong end. Turn the plan the other way "
+                "(rotate 90 vs 270, or add 180).")
+
         for view, g in m["views"].items():
             if "error" in g:
                 raise ValueError(f"the {view} reference is {g['error']}")

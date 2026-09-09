@@ -316,6 +316,20 @@ each other with no model in the scene at all.
 
     {op:"assert", what:"references", views:["side","top","front"], agree:0.03}
 
+**And which way round it faces.** Dimensions cannot tell you: a 180-degree flip
+preserves length, width and height exactly, so a plan view drawn tail-first
+passes every scale check and then puts every feature at the wrong end. The
+same blind spot as judging a mirrored car by its bounding box.
+
+`references` correlates the side and plan extent profiles along the length,
+once as drawn and once with the plan reversed, and reports `aligned`,
+`likely flipped`, or `cannot tell`. On the SK-1 that read −0.02 as drawn
+against +0.53 reversed — decisive, and `rotate: 270` was correct where 90 was
+not. On the Cobra it read +0.75 against +0.71, four hundredths apart: a car's
+side and plan profiles are both smooth blobs with nothing to key on, so it
+says `cannot tell` rather than guessing. Trust it when it is decisive and
+check by eye when it is not.
+
 **Say which way up the drawing is.** A plan view of a car runs lengthwise; a
 plan view of an aircraft is very often drawn nose-up, so its horizontal span is
 the WINGSPAN. Reading one as the other scrambles every dimension downstream
