@@ -271,7 +271,13 @@ What works is the opposite, and it is slower and smaller:
    from two independent samples, i.e. a 0.72 m tyre, correct for 15-inch wheels.
 2. **Construct one part to those numbers.** An arch is an arc at that centre and
    a slightly larger radius; a fender is a section swept along it.
-3. **Verify against the numbers, not the picture.** Arch centre should be
+3. **Check which view each number came from.** The arch's position along the
+   car and its radius live in the SIDE view. Where the wing sits across the car,
+   and how far it stands out, do not — those are in the top and front views, and
+   guessing them is the same error as inventing a whole plan view, just small
+   enough to miss. The first wing was built 0.780 m from the centreline because
+   that looked right; the top view says the body's edge at that axle is 0.835.
+4. **Verify against the numbers, not the picture.** Arch centre should be
    −1.053; the mesh's midpoint is −1.053. Apex should be radius plus the
    section's own rise; it is.
 

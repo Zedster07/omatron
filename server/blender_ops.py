@@ -1136,7 +1136,15 @@ def op_reference(o):
         off_x = (cx_px / w - 0.5) * world_w
         off_z = (ylo / h - 0.5) * world_h
         empty.rotation_euler = _VIEWS[view][1]
-        empty.location = (-off_x, float(o.get("depth", 1.2)), -off_z)
+        # Stand the plate back along the direction this view LOOKS, not along Y
+        # for every view. Offsetting a front-view plate on Y pushes it sideways
+        # out of the car instead of in front of it, so the drawing you are
+        # meant to be lining the model up against sits beside it.
+        look = mathutils.Vector(_VIEWS[view][0])
+        back = look * float(o.get("depth", 1.2))
+        # The plate's own axes: local X across, local Y up, per the rotation.
+        rot = mathutils.Euler(_VIEWS[view][1], "XYZ").to_matrix()
+        empty.location = rot @ mathutils.Vector((-off_x, -off_z, 0.0)) + back
         empty.hide_render = True
         bpy.context.scene.collection.objects.link(empty)
     except Exception:
