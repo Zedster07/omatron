@@ -1230,12 +1230,31 @@ def op_reference(o):
             "anything.")
     length = across
 
+    # Drawings arrive in whatever orientation the draughtsman chose.
+    #
+    # A plan view of a car runs lengthwise; a plan view of an aircraft is very
+    # often drawn nose-up, so its horizontal span is the WINGSPAN. Reading it
+    # as a length silently scrambles every dimension downstream -- and the
+    # cross-view check caught exactly that on an SK-1 sheet, 23.5% out on
+    # height, before anything was built.
+    turn = int(o.get("rotate", 0)) % 360
+    if turn not in (0, 90, 180, 270):
+        raise ValueError("rotate is 0, 90, 180 or 270 degrees")
+
     img = bpy.data.images.load(path, check_existing=False)
     try:
         w, h = img.size
         mask = _fill_holes(_mask_from_pixels(img.pixels[:], w, h))
     finally:
         bpy.data.images.remove(img)
+
+    if turn:
+        import numpy as np
+        # k is negated because Blender hands pixels back bottom-up, so a
+        # clockwise turn on screen is a counter-clockwise turn in this array.
+        mask = np.rot90(mask, k=-(turn // 90))
+        if turn in (90, 270):
+            w, h = h, w
 
     import numpy as np
     rows = np.where(mask.any(axis=1))[0]
@@ -1246,7 +1265,8 @@ def op_reference(o):
     x0, x1, ylo, yhi = int(cols[0]), int(cols[-1]), int(rows[0]), int(rows[-1])
     mpp = (float(length) / (x1 - x0 + 1)) if length else (float(height) / (yhi - ylo + 1))
 
-    cal = {"path": path, "mpp": mpp, "px": [x0, x1, ylo, yhi], "size": [w, h]}
+    cal = {"path": path, "mpp": mpp, "px": [x0, x1, ylo, yhi], "size": [w, h],
+           "rotate": turn}
     bpy.context.scene[f"omatron_ref_{view}"] = json.dumps(cal)
 
     name = f"Reference_{view}"
@@ -1275,7 +1295,10 @@ def op_reference(o):
         # like: a plan view that would not line up with anything.
         anchor = ((ylo + yhi) / 2.0) if view == "top" else ylo
         off_z = (anchor / h - 0.5) * world_h
-        empty.rotation_euler = _VIEWS[view][1]
+        base = mathutils.Euler(_VIEWS[view][1], "XYZ").to_matrix()
+        if turn:
+            base = base @ mathutils.Matrix.Rotation(math.radians(turn), 3, "Z")
+        empty.rotation_euler = base.to_euler()
         # Stand the plate back along the direction this view LOOKS, not along Y
         # for every view. Offsetting a front-view plate on Y pushes it sideways
         # out of the car instead of in front of it, so the drawing you are
@@ -1283,8 +1306,7 @@ def op_reference(o):
         look = mathutils.Vector(_VIEWS[view][0])
         back = look * float(o.get("depth", 1.2))
         # The plate's own axes: local X across, local Y up, per the rotation.
-        rot = mathutils.Euler(_VIEWS[view][1], "XYZ").to_matrix()
-        empty.location = rot @ mathutils.Vector((-off_x, -off_z, 0.0)) + back
+        empty.location = base @ mathutils.Vector((-off_x, -off_z, 0.0)) + back
         empty.hide_render = True
         bpy.context.scene.collection.objects.link(empty)
     except Exception:
@@ -1292,7 +1314,8 @@ def op_reference(o):
 
     return (f"{view}: {os.path.basename(path)} — outline {(x1 - x0 + 1) * mpp:.2f} x "
             f"{(yhi - ylo + 1) * mpp:.2f} m at {mpp * 1000:.2f} mm/px"
-            + (f", matched to {o['match']}" if o.get("match") else ""))
+            + (f", matched to {o['match']}" if o.get("match") else "")
+            + (f", turned {turn}deg" if turn else ""))
 
 
 def _mask_from_pixels(px, w, h):
@@ -1530,6 +1553,13 @@ def _reference_mask(view):
         mask = _fill_holes(_mask_from_pixels(img.pixels[:], *img.size))
     finally:
         bpy.data.images.remove(img)
+    # The same turn the calibration was measured through, or every consumer of
+    # this mask -- trace, silhouette -- reads a drawing at odds with the
+    # numbers describing it.
+    turn = int(cal.get("rotate", 0)) % 360
+    if turn:
+        import numpy as np
+        mask = np.rot90(mask, k=-(turn // 90))
     return mask, cal
 
 

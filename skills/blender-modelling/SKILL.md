@@ -316,6 +316,12 @@ each other with no model in the scene at all.
 
     {op:"assert", what:"references", views:["side","top","front"], agree:0.03}
 
+**Say which way up the drawing is.** A plan view of a car runs lengthwise; a
+plan view of an aircraft is very often drawn nose-up, so its horizontal span is
+the WINGSPAN. Reading one as the other scrambles every dimension downstream
+without looking wrong anywhere. `rotate: 90` (or 180, 270) turns the drawing
+before it is measured, and the plate with it.
+
 **Give ONE view a real-world dimension, and match the rest to it.**
 
     {op:"reference", view:"side",  image:"...", length:3.962}
@@ -328,6 +334,14 @@ view derived 1.673 m from the drawing itself, left every width taken from the
 front view 3.2% wrong. Matching took that to 0.00%. The drawings only have to
 agree with EACH OTHER — a self-consistent set builds a coherent model even if
 its absolute scale is slightly off, and an inconsistent one cannot.
+
+Tested on a second sheet, a Bisnovat SK-1 3-view: the height check came back
+23.5% out, and the cause was the plan view being drawn nose-up. With
+`rotate: 90` the three views agree to 0.6% on height and exactly on length and
+width, all three scales land within 0.5% of each other (3.85–3.87 mm/px), and
+the wingspan the drawings imply — 7.265 m — matches the aircraft's real 7.30 m.
+None of that was known before the check existed; the numbers would simply have
+been wrong.
 
 A residual disagreement is worth reading rather than tightening away: this
 sheet still differs 2.8% on height between its side and front views, which is

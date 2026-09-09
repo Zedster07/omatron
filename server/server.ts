@@ -3900,7 +3900,9 @@ server.registerTool(
       "  reference    view side|front|top, image, plus EITHER a real length/width/height in metres\n" +
       "               OR match:<another view> to take the shared dimension from a drawing already\n" +
       "               attached. Prefer match: the drawings only have to agree with each other,\n" +
-      "               and mixing a spec figure with measured ones puts them out of step\n" +
+      "               and mixing a spec figure with measured ones puts them out of step.\n" +
+      "               rotate 90|180|270 when a drawing is not laid out the way the view assumes —\n" +
+      "               an aircraft plan view is usually nose-up, so its width is the wingspan\n" +
       "  trace        view, stations, floor:\"sill\" — measure a drawing's outline into slices\n" +
       "  loft         name, stations, ring, section_from — build a body from the traced views:\n" +
       "               side gives the profile, top gives width along the length, FRONT gives the\n" +
