@@ -1134,7 +1134,16 @@ def op_reference(o):
         # Put the outline's centre on x=0 and its ground line on z=0.
         cx_px = (x0 + x1) / 2.0
         off_x = (cx_px / w - 0.5) * world_w
-        off_z = (ylo / h - 0.5) * world_h
+        # The vertical edge means different things per view.
+        #
+        # In a side or front view the outline's bottom edge is the GROUND, so
+        # it belongs on z=0. A top view has no ground: it looks down at a car
+        # that is symmetric about its centreline, so it belongs CENTRED on
+        # y=0. Bottom-aligning it there shoved the whole drawing sideways by
+        # half the car's width -- 0.834 m, which is exactly what it looked
+        # like: a plan view that would not line up with anything.
+        anchor = ((ylo + yhi) / 2.0) if view == "top" else ylo
+        off_z = (anchor / h - 0.5) * world_h
         empty.rotation_euler = _VIEWS[view][1]
         # Stand the plate back along the direction this view LOOKS, not along Y
         # for every view. Offsetting a front-view plate on Y pushes it sideways
