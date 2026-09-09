@@ -3897,8 +3897,10 @@ server.registerTool(
       "  look         label, view staged|side|front|top — render the model AS IT STANDS, mid-batch,\n" +
       "               returned with the numbers that go with it. Use it at each decision and before\n" +
       "               anything irreversible; on failure the looks taken first still come back\n" +
-      "  reference    view side|front|top, image, and its real length/width/height in metres —\n" +
-      "               attach a blueprint, calibrated, placed with its ground line on z=0\n" +
+      "  reference    view side|front|top, image, plus EITHER a real length/width/height in metres\n" +
+      "               OR match:<another view> to take the shared dimension from a drawing already\n" +
+      "               attached. Prefer match: the drawings only have to agree with each other,\n" +
+      "               and mixing a spec figure with measured ones puts them out of step\n" +
       "  trace        view, stations, floor:\"sill\" — measure a drawing's outline into slices\n" +
       "  loft         name, stations, ring, section_from — build a body from the traced views:\n" +
       "               side gives the profile, top gives width along the length, FRONT gives the\n" +
@@ -3939,7 +3941,11 @@ server.registerTool(
       "  delete_faces the selection\n" +
       "  apply_modifiers   name — bake them into the mesh, needed before booleans against the result\n" +
       "  measure      what: bounds | overlap | gap | enclosed | topology | silhouette | selection\n" +
-      "               | transform\n" +
+      "               | transform | references\n" +
+      "  assert what:\"references\" — the SETUP, checked like everything else. Three views\n" +
+      "               over-determine the object (side+top both give length, front+top width,\n" +
+      "               side+front height), so disagreement means a drawing is wrong before a\n" +
+      "               single vertex exists. Also checks each plate is anchored where it belongs\n" +
       "               | counts — name, and with (or view, for silhouette)\n" +
       "  assert       the same measurements, but REQUIRED to hold; a failed assert aborts the batch unsaved\n" +
       "  material     name, material, finish: paint | matte_paint | rubber | glass | tinted_glass\n" +

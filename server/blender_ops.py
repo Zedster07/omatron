@@ -632,6 +632,71 @@ def _measure(o):
                 "scale_applied": all(abs(v - 1.0) < 1e-4 for v in sc),
                 "rotation_applied": all(abs(v) < 1e-3 for v in rot)}
 
+    if what == "references":
+        # The setup, checked like everything else is.
+        #
+        # Three drawings OVER-DETERMINE the car: side and top both measure its
+        # length, front and top both measure its width, side and front both
+        # measure its height. Any disagreement means a reference is wrong --
+        # mis-scaled, mis-cropped, or attached to the wrong view -- and that is
+        # knowable before a single vertex exists.
+        #
+        # This layer had assertions for every property of a MODEL and none for
+        # the drawings the model is built from, which is how three placement
+        # bugs survived: each was correct in the one view it was written
+        # against and nothing ever compared them.
+        #
+        #   view    across the drawing   up the drawing
+        #   side    length               height
+        #   front   width                height
+        #   top     length               width
+        got = {}
+        for view in _VIEWS:
+            raw = bpy.context.scene.get(f"omatron_ref_{view}")
+            if not raw:
+                continue
+            try:
+                cal = json.loads(raw)
+            except (TypeError, ValueError):
+                got[view] = {"error": "uncalibrated (attached by an older version)"}
+                continue
+            x0, x1, ylo, yhi = cal["px"]
+            mpp = cal["mpp"]
+            ob = bpy.data.objects.get(f"Reference_{view}")
+            got[view] = {
+                "mm_per_px": round(mpp * 1000, 4),
+                "across": round((x1 - x0 + 1) * mpp, 4),
+                "up": round((yhi - ylo + 1) * mpp, 4),
+                "plate_at": ([round(v, 4) for v in ob.location] if ob else None),
+                "image": os.path.basename(cal["path"]),
+            }
+
+        claims = {"length": [], "width": [], "height": []}
+        for view, g in got.items():
+            if "error" in g:
+                continue
+            if view == "side":
+                claims["length"].append(("side", g["across"]))
+                claims["height"].append(("side", g["up"]))
+            elif view == "front":
+                claims["width"].append(("front", g["across"]))
+                claims["height"].append(("front", g["up"]))
+            elif view == "top":
+                claims["length"].append(("top", g["across"]))
+                claims["width"].append(("top", g["up"]))
+
+        agree = {}
+        for dim, vals in claims.items():
+            if len(vals) < 2:
+                agree[dim] = {"sources": [v[0] for v in vals], "checked": False}
+                continue
+            lo = min(v[1] for v in vals)
+            hi = max(v[1] for v in vals)
+            agree[dim] = {"sources": {v[0]: v[1] for v in vals},
+                          "spread": round((hi - lo) / max(hi, 1e-9), 4), "checked": True}
+
+        return {"what": "references", "views": got, "agreement": agree}
+
     if what == "counts":
         ob = _obj(o["name"])
         verts, faces = _world_verts(ob, dg)
@@ -699,6 +764,37 @@ def op_assert(o):
                 f"{o['name']} carries an unapplied transform (scale {m['scale']}, "
                 f"rotation {m['rotation_deg']}). Apply it before relying on modifiers "
                 "or exporting.")
+    elif what == "references":
+        need = [v for v in (o.get("views") or []) if v not in m["views"]]
+        if need:
+            raise ValueError(
+                f"no reference attached for: {', '.join(need)}. "
+                "A dimension no drawing describes is a dimension you are inventing.")
+        tol = float(o.get("agree", 0.03))
+        for dim, a in m["agreement"].items():
+            if not a["checked"]:
+                continue
+            if a["spread"] > tol:
+                pairs = ", ".join(f"{k} says {v:.3f} m" for k, v in a["sources"].items())
+                raise ValueError(
+                    f"the drawings disagree about {dim} by {a['spread'] * 100:.1f}%: {pairs}. "
+                    "One of them is mis-scaled, mis-cropped, or attached to the wrong view -- "
+                    "and every measurement taken from it will be wrong in the same proportion.")
+        for view, g in m["views"].items():
+            if "error" in g:
+                raise ValueError(f"the {view} reference is {g['error']}")
+            at = g.get("plate_at")
+            if not at:
+                continue
+            # Where each plate must sit, which is the check that would have
+            # caught a top view anchored on a ground line it does not have.
+            if view == "top" and abs(at[1]) > 0.02:
+                raise ValueError(
+                    f"the top plate sits at y={at[1]:.3f} instead of on the centreline. A plan "
+                    "view has no ground edge to rest on -- it must be CENTRED, and one anchored "
+                    "like a side view lands half a car's width out.")
+            if view in ("side", "front") and abs(at[0 if view == "side" else 1]) > 0.02:
+                raise ValueError(f"the {view} plate is not centred across the car (at {at})")
     elif what == "topology":
         for key, limit in (("ngons", "max_ngons"), ("tris", "max_tris"),
                            ("non_manifold_edges", "max_non_manifold"),
@@ -1091,6 +1187,41 @@ def op_reference(o):
     # and treat them all as "across the drawing".
     across = o.get("length") or o.get("width") or o.get("across")
     height = o.get("height")
+
+    # Calibrate against a view already attached, rather than a number from a
+    # spec sheet.
+    #
+    # Three drawings share dimensions -- side and top both span the length,
+    # front and top both span the width, side and front both span the height.
+    # Scaling one from a published figure while its neighbours are scaled from
+    # the drawing puts them out of step: a front view given the Cobra's real
+    # 1.727 m width sat 3.2% wide of the top view's own 1.673 m, and every
+    # width taken from it inherited that error. Matching keeps the set
+    # self-consistent, which is what actually matters -- the drawings only have
+    # to agree with EACH OTHER to build a coherent model.
+    SHARED = {("front", "top"): ("across", "up"),      # width
+              ("front", "side"): ("up", "up"),         # height
+              ("top", "side"): ("across", "across"),   # length
+              ("top", "front"): ("up", "across"),
+              ("side", "top"): ("across", "across"),
+              ("side", "front"): ("up", "up")}
+    if o.get("match"):
+        other = str(o["match"]).lower()
+        key = (view, other)
+        if key not in SHARED:
+            raise ValueError(f"cannot take a dimension from the {other} view for a {view} view")
+        mine, theirs = SHARED[key]
+        raw = bpy.context.scene.get(f"omatron_ref_{other}")
+        if not raw:
+            raise ValueError(f"no {other} reference attached to match against — attach it first")
+        cal = json.loads(raw)
+        x0, x1, ylo, yhi = cal["px"]
+        value = ((x1 - x0 + 1) if theirs == "across" else (yhi - ylo + 1)) * cal["mpp"]
+        if mine == "across":
+            across, height = value, None
+        else:
+            across, height = None, value
+
     if not across and not height:
         raise ValueError(
             "give the real size of the drawn vehicle: length/width (across the "
@@ -1160,7 +1291,8 @@ def op_reference(o):
         pass
 
     return (f"{view}: {os.path.basename(path)} — outline {(x1 - x0 + 1) * mpp:.2f} x "
-            f"{(yhi - ylo + 1) * mpp:.2f} m at {mpp * 1000:.2f} mm/px")
+            f"{(yhi - ylo + 1) * mpp:.2f} m at {mpp * 1000:.2f} mm/px"
+            + (f", matched to {o['match']}" if o.get("match") else ""))
 
 
 def _mask_from_pixels(px, w, h):

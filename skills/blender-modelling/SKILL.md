@@ -309,6 +309,30 @@ Both are computed after normalising each outline to its own bounding box, so a
 drawing scanned at any size compares correctly against a render at any
 distance. It asks about shape, not scale.
 
+**Check the setup before you trust it.** Three views over-determine the
+object: side and top both span the length, front and top both span the width,
+side and front both span the height. So the drawings can be checked against
+each other with no model in the scene at all.
+
+    {op:"assert", what:"references", views:["side","top","front"], agree:0.03}
+
+**Give ONE view a real-world dimension, and match the rest to it.**
+
+    {op:"reference", view:"side",  image:"...", length:3.962}
+    {op:"reference", view:"top",   image:"...", match:"side"}
+    {op:"reference", view:"front", image:"...", match:"top"}
+
+Mixing a published spec figure with measured ones is what puts a set out of
+step. Scaling a Cobra's front view by its real 1.727 m width, while the top
+view derived 1.673 m from the drawing itself, left every width taken from the
+front view 3.2% wrong. Matching took that to 0.00%. The drawings only have to
+agree with EACH OTHER — a self-consistent set builds a coherent model even if
+its absolute scale is slightly off, and an inconsistent one cannot.
+
+A residual disagreement is worth reading rather than tightening away: this
+sheet still differs 2.8% on height between its side and front views, which is
+a fact about the sheet, now visible instead of quietly corrupting measurements.
+
 **Give the reference a real size** — `length` or `height` in metres. The plate
 is then placed with the drawing's ground line on z=0 and its centre on x=0,
 which is where you are about to build, so model and drawing overlap in the
