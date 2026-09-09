@@ -252,6 +252,33 @@ form needs: more stations along the length, more points per section, and
 first, then creases, then detail. Detail on a coarse cage is worse than no
 detail, because it destroys the silhouette that was working.
 
+## Measure the drawing, then CONSTRUCT. Do not fit and hope
+
+The failure to avoid, because it wasted most of a session: taking a box,
+subdividing it, pushing its vertices onto the reference silhouettes, and
+subdividing again in the hope that a car emerges. It does not. Fitting geometry
+to two outlines gives a hull, and adding a million vertices to a hull gives a
+smoother hull — more slop, not more detail. Detail is a DECISION about where a
+feature goes, and a fit loop decides nothing. It also reached 3.5 million
+vertices and took the machine into swap.
+
+What works is the opposite, and it is slower and smaller:
+
+1. **Measure the drawing for real numbers.** The Cobra's front wheel: find the
+   columns whose silhouette touches the ground, and you have two contact
+   patches — centres 2.297 m apart against a real wheelbase of 2.286 m. Sample
+   the tyre's rise either side of a centre and solve for the radius: 0.358 m
+   from two independent samples, i.e. a 0.72 m tyre, correct for 15-inch wheels.
+2. **Construct one part to those numbers.** An arch is an arc at that centre and
+   a slightly larger radius; a fender is a section swept along it.
+3. **Verify against the numbers, not the picture.** Arch centre should be
+   −1.053; the mesh's midpoint is −1.053. Apex should be radius plus the
+   section's own rise; it is.
+
+That produced the first part in a long session that was actually right, and it
+was right the first time, because nothing about it was a guess. Build a car one
+measured part at a time.
+
 ## Work from a blueprint
 
 Proportions guessed are proportions wrong, eventually. Attach reference
